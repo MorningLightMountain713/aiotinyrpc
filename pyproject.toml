@@ -1,12 +1,24 @@
 [tool.poetry]
 name = "aiotinyrpc"
-version = "0.1.0"
+version = "0.1.1"
 description = "\"An aio version of tinyrpc\""
 authors = ["David White <dr.white.nz@gmail.com>"]
 license = "MIT"
 
 [tool.poetry.dependencies]
-python = "^3.9"
+python = "^3.6"
+six = "^1.16.0"
+
+[tool.poetry.optional-dependencies]
+gevent = ['gevent']
+httpclient = ['requests', 'websocket-client', 'gevent-websocket']
+msgpack = ['msgpack']
+socket = ['pycryptodome']
+websocket = ['gevent-websocket']
+wsgi = ['werkzeug']
+zmq = ['pyzmq']
+jsonext = ['jsonext']
+rabbitmq = ['pika']
 
 [tool.poetry.dev-dependencies]
 
