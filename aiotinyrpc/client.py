@@ -2,14 +2,21 @@
 # -*- coding: utf-8 -*-
 
 import sys
+import asyncio
 from collections import namedtuple
 from typing import List, Any, Dict, Callable, Optional
 
 from .transports import ClientTransport
 from .exc import RPCError
-from .protocols import RPCErrorResponse, RPCProtocol, RPCRequest, RPCResponse, RPCBatchResponse
+from .protocols import (
+    RPCErrorResponse,
+    RPCProtocol,
+    RPCRequest,
+    RPCResponse,
+    RPCBatchResponse,
+)
 
-RPCCall = namedtuple('RPCCall', 'method args kwargs')
+RPCCall = namedtuple("RPCCall", "method args kwargs")
 """Defines the elements of an RPC call.
 
 RPCCall is used with :py:meth:`~tinyrpc.client.RPCClient.call_all`
@@ -17,7 +24,7 @@ to provide the list of requests to be processed. Each request contains the
 elements defined in this tuple.
 """
 
-RPCCallTo = namedtuple('RPCCallTo', 'transport method args kwargs')
+RPCCallTo = namedtuple("RPCCallTo", "transport method args kwargs")
 """Defines the elements of a RPC call directed to multiple transports.
 
 RPCCallTo is used with :py:meth:`~tinyrpc.client.RPCClient.call_all`
@@ -33,60 +40,47 @@ class RPCClient(object):
     :param transport: The data transport mechanism
     :type transport: ClientTransport
     """
-    def __init__(
-            self, protocol: RPCProtocol, transport: ClientTransport
-    ) -> None:
+
+    def __init__(self, protocol: RPCProtocol, transport: ClientTransport) -> None:
         self.protocol = protocol
         self.transport = transport
 
-    def _send_and_handle_reply(
-            self,
-            req: RPCRequest,
-            one_way: bool = False,
-            transport: ClientTransport = None,
-            no_exception: bool = False
-    ) -> Optional[RPCResponse]:
-        tport = self.transport if transport is None else transport
+    async def _send_and_handle_reply(self, req: RPCRequest, one_way: bool = False):
+        if self.transport.is_async:
+            reply = await self.transport.send_message(req.serialize(), not one_way)
 
-        # sends ...
-        reply = tport.send_message(req.serialize(), expect_reply=(not one_way))
+        else:
+            # sends and expects for reply if connection is not one way
+            reply = self.transport.send_message(req.serialize(), not one_way)
 
         if one_way:
-            # ... and be done
             return
 
-        # ... or process the reply
+        # waits for reply
         response = self.protocol.parse_reply(reply)
 
-        if not no_exception and isinstance(response, RPCErrorResponse):
-            if hasattr(self.protocol, 'raise_error') and callable(
-                    self.protocol.raise_error):
-                response = self.protocol.raise_error(response)
-            else:
-                raise RPCError(
-                    'Error calling remote procedure: %s' % response.error
-                )
+        if hasattr(response, "error"):
+            raise RPCError("Error calling remote procedure: %s" % response.error)
 
         return response
 
     def call(
-            self, method: str, args: List, kwargs: Dict, one_way: bool = False
+        self, method: str, args: List = [], kwargs: Dict = {}, one_way: bool = False
     ) -> Any:
         """Calls the requested method and returns the result.
 
-        If an error occurred, an :py:class:`~tinyrpc.exc.RPCError` instance
+        If an error occured, an :py:class:`~tinyrpc.exc.RPCError` instance
         is raised.
 
-        :param str method: Name of the method to call.
-        :param list args: Arguments to pass to the method.
-        :param dict kwargs: Keyword arguments to pass to the method.
-        :param bool one_way: Whether or not a reply is desired.
-        :return: The result of the call
-        :rtype: any
+        :param method: Name of the method to call.
+        :param args: Arguments to pass to the method.
+        :param kwargs: Keyword arguments to pass to the method.
+        :param one_way: Whether or not a reply is desired.
         """
+        loop = asyncio.get_event_loop()
         req = self.protocol.create_request(method, args, kwargs, one_way)
 
-        rep = self._send_and_handle_reply(req, one_way)
+        rep = loop.run_until_complete(self._send_and_handle_reply(req, one_way))
 
         if one_way:
             return
@@ -110,16 +104,15 @@ class RPCClient(object):
         """
         threads = []
 
-        if 'gevent' in sys.modules:
+        if "gevent" in sys.modules:
             # assume that gevent is available and functional, make calls in parallel
             import gevent
+
             for r in requests:
                 req = self.protocol.create_request(r.method, r.args, r.kwargs)
                 tr = r.transport.transport if len(r) == 4 else None
                 threads.append(
-                    gevent.spawn(
-                        self._send_and_handle_reply, req, False, tr, True
-                    )
+                    gevent.spawn(self._send_and_handle_reply, req, False, tr, True)
                 )
             gevent.joinall(threads)
             return [t.value for t in threads]
@@ -128,12 +121,10 @@ class RPCClient(object):
             for r in requests:
                 req = self.protocol.create_request(r.method, r.args, r.kwargs)
                 tr = r.transport.transport if len(r) == 4 else None
-                threads.append(
-                    self._send_and_handle_reply(req, False, tr, True)
-                )
+                threads.append(self._send_and_handle_reply(req, False, tr, True))
             return threads
 
-    def get_proxy(self, prefix: str = '', one_way: bool = False) -> 'RPCProxy':
+    def get_proxy(self, prefix: str = "", one_way: bool = False) -> "RPCProxy":
         """Convenience method for creating a proxy.
 
         :param prefix: Passed on to :py:class:`~tinyrpc.client.RPCProxy`.
@@ -163,8 +154,9 @@ class RPCProxy(object):
     :param one_way: Passed to every call of
                     :py:func:`~tinyrpc.client.call`.
     """
+
     def __init__(
-            self, client: RPCClient, prefix: str = '', one_way: bool = False
+        self, client: RPCClient, prefix: str = "", one_way: bool = False
     ) -> None:
         self.client = client
         self.prefix = prefix

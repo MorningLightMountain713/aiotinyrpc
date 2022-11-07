@@ -5,8 +5,8 @@ import msgpack
 import six
 import pytest
 
-from tinyrpc import InvalidReplyError, MethodNotFoundError
-from tinyrpc.protocols.msgpackrpc import (
+from aiotinyrpc import InvalidReplyError, MethodNotFoundError
+from aiotinyrpc.protocols.msgpackrpc import (
     MSGPACKRPCParseError,
     MSGPACKRPCInvalidRequestError,
     MSGPACKRPCMethodNotFoundError,
@@ -21,7 +21,7 @@ def _msgpack_equal(a, b):
 
 @pytest.fixture
 def prot():
-    from tinyrpc.protocols.msgpackrpc import MSGPACKRPCProtocol
+    from aiotinyrpc.protocols.msgpackrpc import MSGPACKRPCProtocol
 
     return MSGPACKRPCProtocol()
 
@@ -210,7 +210,8 @@ def test_request_generation(prot):
 
 def test_jsonrpc_spec_v2_example1(prot):
     # reset id counter
-    from tinyrpc.protocols import default_id_generator
+    from aiotinyrpc.protocols import default_id_generator
+
     prot._id_generator = default_id_generator(1)
 
     request = prot.create_request("subtract", [42, 23])

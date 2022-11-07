@@ -11,12 +11,8 @@ tinyrpc: A small and modular way of handling web-related RPC
 Note
 ----
 
-Tinyrpc has been revised.
-
-The current version will support Python3 only.
-Have a look at the 0.9.x version if you need Python2 support.
-Python2 support will be dropped completely when Python2 retires,
-somewhere in 2020.
+Aiotinyrpc is a fork of tinyrpc. Adds asyncio support. Also adds an encrypted socket 
+transport - thanks to Tom Moulton for the ground work on the encryption.
 
 Motivation
 ----------

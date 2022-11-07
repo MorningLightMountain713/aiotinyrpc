@@ -11,16 +11,17 @@ import gevent.monkey
 from gevent.pywsgi import WSGIServer
 import requests
 
-from tinyrpc.transports.wsgi import WsgiServerTransport
-from tinyrpc.transports.http import HttpPostClientTransport
+from aiotinyrpc.transports.wsgi import WsgiServerTransport
+from aiotinyrpc.transports.http import HttpPostClientTransport
 
-TEST_SERVER_ADDR = ('127.0.0.1', 49294)
+TEST_SERVER_ADDR = ("127.0.0.1", 49294)
 
 
-@pytest.fixture(scope='module', autouse=True)
+@pytest.fixture(scope="module", autouse=True)
 def monkey_patches(request):
     # ugh? ugh. ugh. ugh!
     import socket
+
     gevent.monkey.patch_all(
         socket=True,
         dns=False,
@@ -30,7 +31,8 @@ def monkey_patches(request):
         os=True,
         httplib=False,
         ssl=False,
-        aggressive=False)
+        aggressive=False,
+    )
 
     def fin():
         six.moves.reload_module(socket)
@@ -52,7 +54,7 @@ def wsgi_server(request):
     server_greenlet = gevent.spawn(server.serve_forever)
     gevent.sleep(0)  # wait for server to come up
 
-    return (app, 'http://%s:%d' % TEST_SERVER_ADDR)
+    return (app, "http://%s:%d" % TEST_SERVER_ADDR)
 
 
 def test_server_supports_post_only(wsgi_server):
@@ -69,60 +71,79 @@ def test_server_supports_post_only(wsgi_server):
     assert r.status_code == 405
 
 
-@pytest.mark.parametrize(('msg',),
-    [(six.b('foo'),), (six.b(''),), (six.b('bar'),), (six.b('1234'),), (six.b('{}'),), (six.b('{'),), (six.b('\x00\r\n'),)])
+@pytest.mark.parametrize(
+    ("msg",),
+    [
+        (six.b("foo"),),
+        (six.b(""),),
+        (six.b("bar"),),
+        (six.b("1234"),),
+        (six.b("{}"),),
+        (six.b("{"),),
+        (six.b("\x00\r\n"),),
+    ],
+)
 def test_server_receives_messages(wsgi_server, msg):
     transport, addr = wsgi_server
 
     def consumer():
         context, received_msg = transport.receive_message()
         assert received_msg == msg
-        reply = six.b('reply:') + msg
+        reply = six.b("reply:") + msg
         transport.send_reply(context, reply)
 
     gevent.spawn(consumer)
 
     r = requests.post(addr, data=msg)
 
-    assert r.content == six.b('reply:') + msg
+    assert r.content == six.b("reply:") + msg
 
 
 @pytest.fixture
 def sessioned_client():
     session = requests.Session()
     adapter = requests.adapters.HTTPAdapter(pool_maxsize=100)
-    session.mount('http://', adapter)
+    session.mount("http://", adapter)
     client = HttpPostClientTransport(
-        'http://%s:%d' % TEST_SERVER_ADDR,
-        post_method=session.post
+        "http://%s:%d" % TEST_SERVER_ADDR, post_method=session.post
     )
     return client
 
 
 @pytest.fixture
 def non_sessioned_client():
-    client = HttpPostClientTransport('http://%s:%d' % TEST_SERVER_ADDR)
+    client = HttpPostClientTransport("http://%s:%d" % TEST_SERVER_ADDR)
     return client
 
 
-@pytest.mark.parametrize(('msg',),
-    [(six.b('foo'),), (six.b(''),), (six.b('bar'),), (six.b('1234'),), (six.b('{}'),), (six.b('{'),), (six.b('\x00\r\n'),)])
+@pytest.mark.parametrize(
+    ("msg",),
+    [
+        (six.b("foo"),),
+        (six.b(""),),
+        (six.b("bar"),),
+        (six.b("1234"),),
+        (six.b("{}"),),
+        (six.b("{"),),
+        (six.b("\x00\r\n"),),
+    ],
+)
 def test_sessioned_http_sessioned_client(wsgi_server, sessioned_client, msg):
     transport, addr = wsgi_server
 
     def consumer():
         context, received_msg = transport.receive_message()
         assert received_msg == msg
-        reply = six.b('reply:') + msg
+        reply = six.b("reply:") + msg
         transport.send_reply(context, reply)
 
     gevent.spawn(consumer)
 
     result = sessioned_client.send_message(msg)
-    assert result == six.b('reply:') + msg
+    assert result == six.b("reply:") + msg
 
 
-@pytest.mark.skip('somehow fails on travis')
+@pytest.mark.skip("somehow fails on travis")
 def test_exhaust_ports(wsgi_server, non_sessioned_client):
     """
     This raises a
@@ -137,15 +158,15 @@ def test_exhaust_ports(wsgi_server, non_sessioned_client):
 
     def consumer():
         context, received_msg = transport.receive_message()
-        reply = six.b('reply:') + received_msg
+        reply = six.b("reply:") + received_msg
         transport.send_reply(context, reply)
 
     def send_and_receive(i):
         try:
             gevent.spawn(consumer)
-            msg = six.b('msg_%s' % i)
+            msg = six.b("msg_%s" % i)
             result = non_sessioned_client.send_message(msg)
-            return result == six.b('reply:') + msg
+            return result == six.b("reply:") + msg
         except Exception as e:
             return e
 

@@ -5,10 +5,11 @@ from unittest.mock import Mock
 import pytest
 import inspect
 
-from tinyrpc.dispatch import RPCDispatcher, public
-from tinyrpc import RPCRequest, RPCBatchRequest, RPCBatchResponse
-from tinyrpc.protocols.jsonrpc import JSONRPCProtocol, JSONRPCInvalidParamsError
-from tinyrpc.exc import *
+from aiotinyrpc.dispatch import RPCDispatcher, public
+from aiotinyrpc import RPCRequest, RPCBatchRequest, RPCBatchResponse
+from aiotinyrpc.protocols.jsonrpc import JSONRPCProtocol, JSONRPCInvalidParamsError
+from aiotinyrpc.exc import *
+
 
 @pytest.fixture
 def dispatch():
@@ -20,8 +21,7 @@ def subdispatch():
     return RPCDispatcher()
 
 
-
-def mock_request(method='subtract', args=None, kwargs=None):
+def mock_request(method="subtract", args=None, kwargs=None):
     mock_request = Mock(RPCRequest)
     mock_request.method = method
     mock_request.args = args or [4, 6]
@@ -29,16 +29,18 @@ def mock_request(method='subtract', args=None, kwargs=None):
 
     return mock_request
 
+
 @pytest.fixture(name="mock_request")
 def mock_request_fixture():
     return mock_request()
+
 
 def test_function_decorating_without_paramters(dispatch):
     @dispatch.public
     def foo(bar):
         pass
 
-    assert dispatch.get_method('foo') == foo
+    assert dispatch.get_method("foo") == foo
 
 
 def test_function_decorating_with_empty_paramters(dispatch):
@@ -46,19 +48,18 @@ def test_function_decorating_with_empty_paramters(dispatch):
     def foo(bar):
         pass
 
-    assert dispatch.get_method('foo') == foo
+    assert dispatch.get_method("foo") == foo
 
 
 def test_function_decorating_with_paramters(dispatch):
-    @dispatch.public(name='baz')
+    @dispatch.public(name="baz")
     def foo(bar):
         pass
 
     with pytest.raises(MethodNotFoundError):
-        dispatch.get_method('foo')
+        dispatch.get_method("foo")
 
-
-    assert dispatch.get_method('baz') == foo
+    assert dispatch.get_method("baz") == foo
 
 
 def test_subdispatchers(dispatch, subdispatch):
@@ -66,14 +67,14 @@ def test_subdispatchers(dispatch, subdispatch):
     def foo(bar):
         pass
 
-    @subdispatch.public(name='foo')
+    @subdispatch.public(name="foo")
     def subfoo(bar):
         pass
 
-    dispatch.add_subdispatch(subdispatch, 'sub.')
+    dispatch.add_subdispatch(subdispatch, "sub.")
 
-    assert dispatch.get_method('foo') == foo
-    assert dispatch.get_method('sub.foo') == subfoo
+    assert dispatch.get_method("foo") == foo
+    assert dispatch.get_method("sub.foo") == subfoo
 
 
 def test_object_method_marking():
@@ -85,15 +86,15 @@ def test_object_method_marking():
         def foo2(self):
             pass
 
-        @public(name='baz')
+        @public(name="baz")
         def foo3(self):
             pass
 
     f = Foo()
 
-    assert not hasattr(f.foo1, '_rpc_public_name')
-    assert f.foo2._rpc_public_name == 'foo2'
-    assert f.foo3._rpc_public_name == 'baz'
+    assert not hasattr(f.foo1, "_rpc_public_name")
+    assert f.foo2._rpc_public_name == "foo2"
+    assert f.foo3._rpc_public_name == "baz"
 
 
 def test_object_method_register(dispatch):
@@ -105,7 +106,7 @@ def test_object_method_register(dispatch):
         def foo2(self):
             pass
 
-        @public(name='baz')
+        @public(name="baz")
         def foo3(self):
             pass
 
@@ -113,10 +114,10 @@ def test_object_method_register(dispatch):
     dispatch.register_instance(f)
 
     with pytest.raises(MethodNotFoundError):
-        assert dispatch.get_method('foo1')
+        assert dispatch.get_method("foo1")
 
-    assert dispatch.get_method('foo2') == f.foo2
-    assert dispatch.get_method('baz') == f.foo3
+    assert dispatch.get_method("foo2") == f.foo2
+    assert dispatch.get_method("baz") == f.foo3
 
 
 def test_object_method_register_with_prefix(dispatch):
@@ -128,34 +129,34 @@ def test_object_method_register_with_prefix(dispatch):
         def foo2(self):
             pass
 
-        @public(name='baz')
+        @public(name="baz")
         def foo3(self):
             pass
 
     f = Foo()
-    dispatch.register_instance(f, 'myprefix')
+    dispatch.register_instance(f, "myprefix")
 
     with pytest.raises(MethodNotFoundError):
-        assert dispatch.get_method('foo1')
+        assert dispatch.get_method("foo1")
 
     with pytest.raises(MethodNotFoundError):
-        assert dispatch.get_method('myprefixfoo1')
+        assert dispatch.get_method("myprefixfoo1")
 
     with pytest.raises(MethodNotFoundError):
-        assert dispatch.get_method('foo2')
+        assert dispatch.get_method("foo2")
 
     with pytest.raises(MethodNotFoundError):
-        assert dispatch.get_method('foo3')
+        assert dispatch.get_method("foo3")
 
-    assert dispatch.get_method('myprefixfoo2') == f.foo2
-    assert dispatch.get_method('myprefixbaz') == f.foo3
+    assert dispatch.get_method("myprefixfoo2") == f.foo2
+    assert dispatch.get_method("myprefixbaz") == f.foo3
 
 
 def test_dispatch_calls_method_and_responds(dispatch, mock_request):
     m = Mock()
     m.subtract = Mock(return_value=-2)
 
-    dispatch.add_method(m.subtract, 'subtract')
+    dispatch.add_method(m.subtract, "subtract")
     response = dispatch.dispatch(mock_request)
 
     assert m.subtract.called
@@ -170,9 +171,9 @@ def test_dispatch_handles_in_function_exceptions(dispatch, mock_request):
     class MockError(Exception):
         pass
 
-    m.subtract.side_effect = MockError('mock error')
+    m.subtract.side_effect = MockError("mock error")
 
-    dispatch.add_method(m.subtract, 'subtract')
+    dispatch.add_method(m.subtract, "subtract")
     response = dispatch.dispatch(mock_request)
 
     assert m.subtract.called
@@ -181,17 +182,17 @@ def test_dispatch_handles_in_function_exceptions(dispatch, mock_request):
 
 
 def test_batch_dispatch(dispatch):
-    method1 = Mock(return_value='rv1')
+    method1 = Mock(return_value="rv1")
     method2 = Mock(return_value=None)
 
-    dispatch.add_method(method1, 'method1')
-    dispatch.add_method(method2, 'method2')
+    dispatch.add_method(method1, "method1")
+    dispatch.add_method(method2, "method2")
 
     batch_request = RPCBatchRequest()
-    batch_request.error_respond = Mock(return_value='ERROR')
-    batch_request.append(mock_request('method1', args=[1,2]))
-    batch_request.append(mock_request('non_existant_method', args=[5,6]))
-    batch_request.append(mock_request('method2', args=[3,4]))
+    batch_request.error_respond = Mock(return_value="ERROR")
+    batch_request.append(mock_request("method1", args=[1, 2]))
+    batch_request.append(mock_request("non_existant_method", args=[5, 6]))
+    batch_request.append(mock_request("method2", args=[3, 4]))
 
     batch_request.create_batch_response = lambda: RPCBatchResponse()
 
@@ -208,25 +209,29 @@ def test_batch_dispatch(dispatch):
 
 def test_dispatch_raises_key_error(dispatch):
     with pytest.raises(MethodNotFoundError):
-        dispatch.get_method('foo')
+        dispatch.get_method("foo")
 
-@pytest.fixture(params=[
-    ('fn_a', [4, 6], {}, -2),
-    ('fn_a', [4], {}, InvalidParamsError),
-    # InvalidParamsError instead of JSONRPCInvalidParamsError due to mocking
-    ('fn_a', [], {'a':4, 'b':6}, -2),
-    ('fn_a', [4], {'b':6}, -2),
-    ('fn_b', [4, 6], {}, -2),
-    ('fn_b', [], {'a':4, 'b':6}, InvalidParamsError),
-    ('fn_b', [4], {}, IndexError),
-    # a[1] doesn't exist, can't be detected beforehand
-    ('fn_c', [4, 6], {}, InvalidParamsError),
-    ('fn_c', [], {'a':4, 'b':6}, -2),
-    ('fn_c', [], {'a':4}, KeyError)
-    # a['b'] doesn't exist, can't be detected beforehand
-])
+
+@pytest.fixture(
+    params=[
+        ("fn_a", [4, 6], {}, -2),
+        ("fn_a", [4], {}, InvalidParamsError),
+        # InvalidParamsError instead of JSONRPCInvalidParamsError due to mocking
+        ("fn_a", [], {"a": 4, "b": 6}, -2),
+        ("fn_a", [4], {"b": 6}, -2),
+        ("fn_b", [4, 6], {}, -2),
+        ("fn_b", [], {"a": 4, "b": 6}, InvalidParamsError),
+        ("fn_b", [4], {}, IndexError),
+        # a[1] doesn't exist, can't be detected beforehand
+        ("fn_c", [4, 6], {}, InvalidParamsError),
+        ("fn_c", [], {"a": 4, "b": 6}, -2),
+        ("fn_c", [], {"a": 4}, KeyError)
+        # a['b'] doesn't exist, can't be detected beforehand
+    ]
+)
 def invoke_with(request):
     return request.param
+
 
 def test_argument_error(dispatch, invoke_with):
     method, args, kwargs, result = invoke_with
@@ -235,35 +240,37 @@ def test_argument_error(dispatch, invoke_with):
 
     @dispatch.public
     def fn_a(a, b):
-        return a-b
+        return a - b
 
     @dispatch.public
     def fn_b(*a):
-        return a[0]-a[1]
+        return a[0] - a[1]
 
     @dispatch.public
     def fn_c(**a):
-        return a['a']-a['b']
+        return a["a"] - a["b"]
 
     mock_request = Mock(RPCRequest)
     mock_request.args = args
     mock_request.kwargs = kwargs
     mock_request.method = method
-    dispatch._dispatch(mock_request, getattr(protocol, '_caller', None))
+    dispatch._dispatch(mock_request, getattr(protocol, "_caller", None))
     if inspect.isclass(result) and issubclass(result, Exception):
         assert type(mock_request.error_respond.call_args[0][0]) == result
     else:
         mock_request.respond.assert_called_with(result)
 
+
 def test_call_argument_validation(dispatch):
-    def f(a,b):
-        return a+b
+    def f(a, b):
+        return a + b
 
     dispatch.validate_parameters(f, [1, 2], {})
     with pytest.raises(InvalidParamsError):
         dispatch.validate_parameters(f, [1], {})
     dispatch.validate_parameters(dir, [], {})
     # should skip validation, will produce error otherwise
+
 
 def test_bound_method_argument_error(dispatch, invoke_with):
     method, args, kwargs, result = invoke_with
@@ -272,39 +279,43 @@ def test_bound_method_argument_error(dispatch, invoke_with):
 
     class Test:
         c = 0
+
         @public
         def fn_a(self, a, b):
-            return a-b+self.c
+            return a - b + self.c
 
         @public
         def fn_b(self, *a):
-            return a[0]-a[1]+self.c
+            return a[0] - a[1] + self.c
 
         @public
         def fn_c(self, **a):
-            return a['a']-a['b']+self.c
+            return a["a"] - a["b"] + self.c
 
-    test=Test()
+    test = Test()
     dispatch.register_instance(test)
     mock_request = Mock(RPCRequest)
     mock_request.args = args
     mock_request.kwargs = kwargs
     mock_request.method = method
-    dispatch._dispatch(mock_request, getattr(protocol, '_caller', None))
+    dispatch._dispatch(mock_request, getattr(protocol, "_caller", None))
     if inspect.isclass(result) and issubclass(result, Exception):
         assert type(mock_request.error_respond.call_args[0][0]) == result
     else:
         mock_request.respond.assert_called_with(result)
 
+
 def test_bound_method_validation(dispatch):
     class Test:
         def f(self, a, b):
-            return a+b
+            return a + b
+
     inst = Test()
 
     dispatch.validate_parameters(inst.f, [1, 2], {})
     with pytest.raises(InvalidParamsError):
         dispatch.validate_parameters(inst.f, [1], {})
+
 
 def test_unbound_method_argument_error(dispatch, invoke_with):
     method, args, kwargs, result = invoke_with
@@ -313,37 +324,40 @@ def test_unbound_method_argument_error(dispatch, invoke_with):
 
     class Test:
         c = 0
+
         @public
         def fn_a(a, b):
-            return a-b
+            return a - b
 
         @public
         def fn_b(*a):
-            return a[0]-a[1]
+            return a[0] - a[1]
 
         @public
         def fn_c(**a):
-            return a['a']-a['b']
+            return a["a"] - a["b"]
 
     dispatch.register_instance(Test)
     mock_request = Mock(RPCRequest)
     mock_request.args = args
     mock_request.kwargs = kwargs
     mock_request.method = method
-    dispatch._dispatch(mock_request, getattr(protocol, '_caller', None))
+    dispatch._dispatch(mock_request, getattr(protocol, "_caller", None))
     if inspect.isclass(result) and issubclass(result, Exception):
         assert type(mock_request.error_respond.call_args[0][0]) == result
     else:
         mock_request.respond.assert_called_with(result)
 
+
 def test_unbound_method_validation(dispatch):
     class Test:
         def f(a, b):
-            return a+b
+            return a + b
 
     dispatch.validate_parameters(Test.f, [1, 2], {})
     with pytest.raises(InvalidParamsError):
         dispatch.validate_parameters(Test.f, [1], {})
+
 
 def test_static_method_argument_error(dispatch, invoke_with):
     method, args, kwargs, result = invoke_with
@@ -352,43 +366,47 @@ def test_static_method_argument_error(dispatch, invoke_with):
 
     class Test:
         c = 0
+
         @staticmethod
         @public
         def fn_a(a, b):
-            return a-b
+            return a - b
 
         @staticmethod
         @public
         def fn_b(*a):
-            return a[0]-a[1]
+            return a[0] - a[1]
 
         @staticmethod
         @public
         def fn_c(**a):
-            return a['a']-a['b']
+            return a["a"] - a["b"]
 
-    test=Test()
+    test = Test()
     dispatch.register_instance(test)
     mock_request = Mock(RPCRequest)
     mock_request.args = args
     mock_request.kwargs = kwargs
     mock_request.method = method
-    dispatch._dispatch(mock_request, getattr(protocol, '_caller', None))
+    dispatch._dispatch(mock_request, getattr(protocol, "_caller", None))
     if inspect.isclass(result) and issubclass(result, Exception):
         assert type(mock_request.error_respond.call_args[0][0]) == result
     else:
         mock_request.respond.assert_called_with(result)
 
+
 def test_static_method_validation(dispatch):
     class Test:
         @staticmethod
         def f(a, b):
-            return a+b
+            return a + b
+
     inst = Test()
 
     dispatch.validate_parameters(inst.f, [1, 2], {})
     with pytest.raises(InvalidParamsError):
         dispatch.validate_parameters(inst.f, [1], {})
+
 
 def test_class_method_argument_error(dispatch, invoke_with):
     method, args, kwargs, result = invoke_with
@@ -397,41 +415,43 @@ def test_class_method_argument_error(dispatch, invoke_with):
 
     class Test:
         c = 0
+
         @classmethod
         @public
         def fn_a(cls, a, b):
-            return a-b-cls.c
+            return a - b - cls.c
 
         @classmethod
         @public
         def fn_b(cls, *a):
-            return a[0]-a[1]-cls.c
+            return a[0] - a[1] - cls.c
 
         @classmethod
         @public
         def fn_c(cls, **a):
-            return a['a']-a['b']-cls.c
+            return a["a"] - a["b"] - cls.c
 
-    test=Test()
+    test = Test()
     dispatch.register_instance(test)
     mock_request = Mock(RPCRequest)
     mock_request.args = args
     mock_request.kwargs = kwargs
     mock_request.method = method
-    dispatch._dispatch(mock_request, getattr(protocol, '_caller', None))
+    dispatch._dispatch(mock_request, getattr(protocol, "_caller", None))
     if inspect.isclass(result) and issubclass(result, Exception):
         assert type(mock_request.error_respond.call_args[0][0]) == result
     else:
         mock_request.respond.assert_called_with(result)
 
+
 def test_class_method_validation(dispatch):
     class Test:
         @classmethod
         def f(cls, a, b):
-            return a+b
+            return a + b
+
     inst = Test()
 
     dispatch.validate_parameters(inst.f, [1, 2], {})
     with pytest.raises(InvalidParamsError):
         dispatch.validate_parameters(inst.f, [1], {})
-
