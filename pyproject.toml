@@ -36,3 +36,15 @@ wsgi = ['werkzeug']
 zmq = ['pyzmq']
 jsonext = ['jsonext']
 rabbitmq = ['pika']
+
+[tool.tox]
+legacy_tox_ini = """
+[tox]
+envlist = py34, py35, py36, py37, py38, py39
+
+[testenv]
+deps = -rrequirements.txt
+commands=
+    pytest -rs
+    pytest --cov=tinyrpc/ --cov-report=term --cov-report=html
+"""
