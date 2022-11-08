@@ -2,6 +2,8 @@ from __future__ import annotations  # 3.10 style
 from typing import Any
 
 import json
+import bson
+
 import asyncio
 
 from aiotinyrpc.transports import ClientTransport, ServerTransport
@@ -20,24 +22,26 @@ def encrypt_aes_data(key, message: bytes) -> str:
         "tag": tag.hex(),
         "ciphertext": ciphertext.hex(),
     }
-    return json.dumps(jdata).encode("utf-8")
+    # return json.dumps(jdata).encode("utf-8")
+    return bson.encode(jdata)
 
 
 def decrypt_aes_data(key, data: bytes) -> dict:
     """Take a bytes stream and AES key and decrypt it"""
     # ToDo: Error checking
     try:
-        jdata = json.loads(data.decode("utf-8"))
+        # jdata = json.loads(data.decode("utf-8"))
+        jdata = bson.decode(data)
         nonce = bytes.fromhex(jdata["nonce"])
         tag = bytes.fromhex(jdata["tag"])
         ciphertext = bytes.fromhex(jdata["ciphertext"])
-
         # let's assume that the key is somehow available again
         cipher = AES.new(key, AES.MODE_EAX, nonce)
         msg = cipher.decrypt_and_verify(ciphertext, tag)
     except ValueError:
         raise
-    return json.loads(msg)
+    # return json.loads(msg)
+    return bson.decode(msg)
 
 
 class EncryptedSocketClientTransport(ClientTransport):
@@ -64,7 +68,8 @@ class EncryptedSocketClientTransport(ClientTransport):
 
     def serialize(self, msg: Any) -> bytes:
         """Converts any object to json and encodes in as bytes, reading for sending"""
-        return json.dumps(msg).encode()
+        # return json.dumps(msg).encode()
+        return bson.encode(msg)
 
     def encrypt_aes_key(self, keypem: str, data: str) -> dict:
         """Generate and encrypt AES session key with RSA public key"""
@@ -153,15 +158,15 @@ class EncryptedSocketClientTransport(ClientTransport):
 
             return message
 
-    async def check_encryption_and_send(
-        self, message: bytes, expect_reply: bool = True
-    ):
-        """If our state is encrypted, encrypt data and send otherwise just send"""
-        if self.encrypted:
-            message = encrypt_aes_data(self.aeskey, message)
+    # async def check_encryption_and_send(
+    #     self, message: bytes, expect_reply: bool = True
+    # ):
+    #     """If our state is encrypted, encrypt data and send otherwise just send"""
+    #     if self.encrypted:
+    #         message = encrypt_aes_data(self.aeskey, message)
 
-        encoded = self.serialize(message)
-        return await self.send_message(encoded, expect_reply)
+    #     encoded = self.serialize(message)
+    #     return await self.send_message(encoded, expect_reply)
 
     async def send_message(self, message: bytes, expect_reply: bool = True):
         """Writes data on the socket"""
@@ -173,6 +178,7 @@ class EncryptedSocketClientTransport(ClientTransport):
 
         self.writer.write(message + self.seperator)
         await self.writer.drain()
+        print("Message sent")
 
         if expect_reply:
             return await self.wait_for_message()
@@ -230,18 +236,20 @@ class EncryptedSocketServerTransport(ServerTransport):
 
         # ToDo: does receive_on_socket need to return peer?
         await self.send(writer, self.sockets[peer]["key_data"]["Public"])
+
         _, encrypted_aes_key = await self.receive_on_socket(peer, reader)
 
         # ToDo: try / except
         aeskey = self.decrypt_aes_key(
-            self.sockets[peer]["key_data"]["Private"], json.loads(encrypted_aes_key)
+            self.sockets[peer]["key_data"]["Private"], bson.decode(encrypted_aes_key)
         )
         self.sockets[peer]["key_data"]["AESKEY"] = aeskey
 
         # Send a test encryption request, always include random data
         random = get_random_bytes(16).hex()
         test_msg = {"text": "TestEncryptionMessage", "fill": random}
-        enc_msg = json.dumps(test_msg).encode()
+        # enc_msg = json.dumps(test_msg).encode()
+        enc_msg = bson.encode(test_msg)
         # ToDo: this function should take dict, str or bytes
         encrypted_test_msg = encrypt_aes_data(aeskey, enc_msg)
         await self.send(writer, encrypted_test_msg)
@@ -302,7 +310,7 @@ class EncryptedSocketServerTransport(ServerTransport):
             message = await asyncio.wait_for(task, None)
 
             if message:
-                print("Message received (decrypted):", message)
+                # print("Message received (decrypted):", message)
                 self.messages.append(message)
             else:  # Socket closed
                 running = False
@@ -323,18 +331,26 @@ class EncryptedSocketServerTransport(ServerTransport):
             print("AT EOF")
             return None
         try:
-            data = await reader.readuntil(separator=self.seperator)
+            data += await reader.readuntil(separator=self.seperator)
         except asyncio.exceptions.IncompleteReadError:
             return None
+        except asyncio.LimitOverrunError as e:
+            data = []
+            while True:
+                current = await reader.read(64000)
+                if current.endswith(self.seperator):
+                    data.append(current)
+                    break
+                data.append(current)
+            data = b"".join(data)
 
         message = data.rstrip(self.seperator)
-        # message = message.decode()
 
         if self.sockets[peer]["encrypted"]:
             message = decrypt_aes_data(
                 self.sockets[peer]["key_data"]["AESKEY"], message
             )
-            message = json.dumps(message).encode()
+            message = bson.encode(message)
 
         return (peer, message)
 

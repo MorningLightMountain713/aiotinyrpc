@@ -11,6 +11,7 @@ Tinyrpc will detect the presence of jsonext and use it automatically.
 """
 
 import json
+import bson
 import sys
 from aiotinyrpc.exc import UnexpectedIDError
 from typing import Dict, Any, Union, Optional, List, Tuple, Callable, Generator
@@ -231,7 +232,8 @@ class JSONRPCSuccessResponse(RPCResponse):
         :return: The serialized encoded response object.
         :rtype: bytes
         """
-        return json_dumps(self._to_dict()).encode()
+        return bson.encode(self._to_dict())
+        # return json_dumps(self._to_dict()).encode()
 
 
 class JSONRPCErrorResponse(RPCErrorResponse):
@@ -461,7 +463,7 @@ class JSONRPCRequest(RPCRequest):
         :return: The serialized encoded request object.
         :rtype: bytes
         """
-        return json_dumps(self._to_dict()).encode()
+        return bson.encode(self._to_dict())
 
 
 class JSONRPCBatchRequest(RPCBatchRequest):
@@ -619,11 +621,12 @@ class JSONRPCProtocol(RPCBatchProtocol):
         :raises InvalidReplyError: if the response is not valid JSON or does not conform
             to the standard.
         """
-        if isinstance(data, bytes):
-            data = data.decode()
+        # if isinstance(data, bytes):
+        #     data = data.decode()
 
         try:
-            rep = json.loads(data)
+            # rep = json.loads(data)
+            rep = bson.decode(data)
         except Exception as e:
             raise InvalidReplyError(e)
 
@@ -698,11 +701,12 @@ class JSONRPCProtocol(RPCBatchProtocol):
         :raises JSONRPCParseError: if the ``data`` cannot be parsed as valid JSON.
         :raises JSONRPCInvalidRequestError: if the request does not comply with the standard.
         """
-        if isinstance(data, bytes):
-            data = data.decode()
+        # if isinstance(data, bytes):
+        #     data = data.decode()
 
         try:
-            req = json.loads(data)
+            # req = json.loads(data)
+            req = bson.decode(data)
         except Exception as e:
             raise JSONRPCParseError()
 

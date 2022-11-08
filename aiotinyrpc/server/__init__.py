@@ -10,7 +10,7 @@ from typing import Any
 
 import asyncio
 
-import aiotinyrpc.exc
+from aiotinyrpc import exc
 from aiotinyrpc import RPCProtocol
 from aiotinyrpc.dispatch import RPCDispatcher
 from aiotinyrpc.transports import ServerTransport
