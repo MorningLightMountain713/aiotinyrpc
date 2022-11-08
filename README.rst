@@ -12,7 +12,7 @@ Note
 ----
 
 Aiotinyrpc is a fork of tinyrpc. Adds asyncio support. Also adds an encrypted socket 
-transport - thanks to Tom Moulton for the ground work on the encryption.
+transport - thanks to Tom Moulton for the pioneering work on the encryption.
 
 Motivation
 ----------

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "aiotinyrpc"
-version = "0.2.0"
+version = "0.2.2"
 description = "\"An aio version of tinyrpc\""
 authors = ["David White <dr.white.nz@gmail.com>"]
 license = "MIT"
@@ -31,7 +31,7 @@ build-backend = "poetry.core.masonry.api"
 gevent = ['gevent']
 httpclient = ['requests', 'websocket-client', 'gevent-websocket']
 msgpack = ['msgpack']
-socket = ['pycryptodome']
+socket = ['pycryptodome', 'pymongo']
 websocket = ['gevent-websocket']
 wsgi = ['werkzeug']
 zmq = ['pyzmq']
