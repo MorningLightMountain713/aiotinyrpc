@@ -331,7 +331,7 @@ class EncryptedSocketServerTransport(ServerTransport):
             print("AT EOF")
             return None
         try:
-            data += await reader.readuntil(separator=self.seperator)
+            data = await reader.readuntil(separator=self.seperator)
         except asyncio.exceptions.IncompleteReadError:
             return None
         except asyncio.LimitOverrunError as e:
