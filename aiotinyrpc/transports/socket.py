@@ -1,10 +1,10 @@
 from __future__ import annotations  # 3.10 style
 from typing import Any
 
-import json
 import bson
 
 import asyncio
+import logging
 
 from aiotinyrpc.transports import ClientTransport, ServerTransport
 
@@ -22,15 +22,14 @@ def encrypt_aes_data(key, message: bytes) -> str:
         "tag": tag.hex(),
         "ciphertext": ciphertext.hex(),
     }
-    # return json.dumps(jdata).encode("utf-8")
     return bson.encode(jdata)
 
 
+# ToDo: these aes encrypt / decrypt functions double encrypt
 def decrypt_aes_data(key, data: bytes) -> dict:
     """Take a bytes stream and AES key and decrypt it"""
     # ToDo: Error checking
     try:
-        # jdata = json.loads(data.decode("utf-8"))
         jdata = bson.decode(data)
         nonce = bytes.fromhex(jdata["nonce"])
         tag = bytes.fromhex(jdata["tag"])
@@ -40,22 +39,41 @@ def decrypt_aes_data(key, data: bytes) -> dict:
         msg = cipher.decrypt_and_verify(ciphertext, tag)
     except ValueError:
         raise
-    # return json.loads(msg)
     return bson.decode(msg)
 
 
-class EncryptedSocketClientTransport(ClientTransport):
-    """ToDo"""
+def get_logger(debug, owner) -> logging.Logger:
+    """Sets up logging. Note: If log file is used, log rotation will need to be sorted
+    (It's outside the scope of this module for now)"""
+    formatter = logging.Formatter(
+        "%(asctime)s: %(name)s: %(levelname)s: %(message)s", "%Y-%m-%d %H:%M:%S"
+    )
+    log = logging.getLogger(f"aiotinyrpc_{owner}")
+    level = logging.DEBUG if debug else logging.INFO
+    log.setLevel(level)
 
-    def __init__(self, address: str, port: int):
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+
+    log.addHandler(stream_handler)
+
+    return log
+
+
+class EncryptedSocketClientTransport(ClientTransport):
+    """ToDo: this docstring"""
+
+    def __init__(self, address: str, port: int, debug: bool = False):
         self._address = address
         self._port = port
         self._connected = False
+        self.debug = debug
         self.is_async = True
         self.encrypted = False
         self.seperator = b"<?!!?>"
         self.loop = asyncio.get_event_loop()
         self.reader, self.writer = None, None
+        self.log = get_logger(self.debug, "client")
 
         self.loop.run_until_complete(self.get_connection())
 
@@ -68,7 +86,6 @@ class EncryptedSocketClientTransport(ClientTransport):
 
     def serialize(self, msg: Any) -> bytes:
         """Converts any object to json and encodes in as bytes, reading for sending"""
-        # return json.dumps(msg).encode()
         return bson.encode(msg)
 
     def encrypt_aes_key(self, keypem: str, data: str) -> dict:
@@ -121,7 +138,7 @@ class EncryptedSocketClientTransport(ClientTransport):
 
     async def get_connection(self):
         """Connects to socket server. Tries a max of 3 times"""
-        print(f"Opening connection to {self._address} on port {self._port}")
+        self.log.info(f"Opening connection to {self._address} on port {self._port}")
         retries = 3
 
         for n in range(retries):
@@ -132,10 +149,10 @@ class EncryptedSocketClientTransport(ClientTransport):
                 break
 
             except asyncio.TimeoutError:
-                print(f"Timeout error connecting to {self._address}")
+                self.log.warn(f"Timeout error connecting to {self._address}")
                 await asyncio.sleep(n)
             except ConnectionError:
-                print(f"Connection error connecting to {self._address}")
+                self.log.warn(f"Connection error connecting to {self._address}")
 
     def connected(self) -> bool:
         """If the socket is connected or not"""
@@ -171,14 +188,14 @@ class EncryptedSocketClientTransport(ClientTransport):
     async def send_message(self, message: bytes, expect_reply: bool = True):
         """Writes data on the socket"""
         if self.encrypted:
-            print("Sending encrypted message")
+            self.log.debug(f"Sending encrypted message: {message}")
             message = encrypt_aes_data(self.aeskey, message)
         else:
-            print("Sending message in the clear")
+            self.log.debug(f"Sending message in the clear: {message}")
 
         self.writer.write(message + self.seperator)
         await self.writer.drain()
-        print("Message sent")
+        self.log.debug("Message sent!")
 
         if expect_reply:
             return await self.wait_for_message()
@@ -191,7 +208,7 @@ class EncryptedSocketClientTransport(ClientTransport):
 
     def __del__(self):
         if self.writer and not self.writer.is_closing():
-            print("Closing socket")
+            self.log.info("Closing socket")
             self.loop.run_until_complete(self.close_socket())
 
 
@@ -202,10 +219,13 @@ class EncryptedSocketServerTransport(ServerTransport):
         port: int,
         whitelisted_addresses: list = [],
         authenticate_clients: bool = False,
+        debug: bool = False,
     ):
         self._address = address
         self._port = port
         self.is_async = True
+        self.debug = debug
+        self.log = get_logger(self.debug, "server")
         self.sockets = {}
         self.messages = []
         self.seperator = b"<?!!?>"
@@ -261,7 +281,7 @@ class EncryptedSocketServerTransport(ServerTransport):
             and response.get("fill") == random[::-1]
         ):
             self.sockets[peer]["encrypted"] = True
-        print("Encryption state:", self.sockets[peer]["encrypted"])
+        self.log.info("Socket is encrypted:", self.sockets[peer]["encrypted"])
 
     def generate_key_data(self, peer):
         rsa = RSA.generate(2048)
@@ -280,7 +300,7 @@ class EncryptedSocketServerTransport(ServerTransport):
             # this to 3 seconds. In fact, it makes it even easier to DoS as you have an
             # open socket consuming resources / port
             await asyncio.sleep(3)
-            print(
+            self.log.warn(
                 f"Reject Connection, wrong IP: {peer_ip} Expected {self.whitelisted_addresses}"
             )
             return False
@@ -288,7 +308,7 @@ class EncryptedSocketServerTransport(ServerTransport):
 
     async def handle_client(self, reader, writer):
         peer = writer.get_extra_info("peername")
-        print("Peer connected:", peer)
+        self.log.info(f"Peer connected: {peer}")
 
         if self.authenticate_clients and not await self.authenticated(peer[0]):
             writer.close()
@@ -310,7 +330,7 @@ class EncryptedSocketServerTransport(ServerTransport):
             message = await asyncio.wait_for(task, None)
 
             if message:
-                # print("Message received (decrypted):", message)
+                self.log.debug(f"Message received (decrypted): {message}")
                 self.messages.append(message)
             else:  # Socket closed
                 running = False
@@ -322,13 +342,12 @@ class EncryptedSocketServerTransport(ServerTransport):
         )
 
         addrs = ", ".join(str(sock.getsockname()) for sock in self.server.sockets)
-        print(f"Serving on {addrs}")
+        self.log.info(f"Serving on {addrs}")
 
     async def receive_on_socket(self, peer, reader) -> tuple | None:
         if reader.at_eof():
             self.sockets[peer]["writer"].close()
             del self.sockets[peer]
-            print("AT EOF")
             return None
         try:
             data = await reader.readuntil(separator=self.seperator)
