@@ -4,9 +4,9 @@
 
 Defines the abstract base classes from which a protocol definition must be constructed.
 """
-from abc import ABC
-from typing import Any, Generator, List, Dict, Union, Optional
 import itertools
+from abc import ABC
+from typing import Any, Dict, Generator, List, Optional, Union
 
 from aiotinyrpc import exc
 

@@ -4,14 +4,12 @@
 Defines and implements a single-threaded, single-process, synchronous server.
 """
 
+import asyncio
 # FIXME: needs (more) unittests
 # FIXME: needs checks for out-of-order, concurrency, etc as attributes
 from typing import Any
 
-import asyncio
-
-from aiotinyrpc import exc
-from aiotinyrpc import RPCProtocol
+from aiotinyrpc import RPCProtocol, exc
 from aiotinyrpc.dispatch import RPCDispatcher
 from aiotinyrpc.transports import ServerTransport
 
@@ -67,13 +65,14 @@ class RPCServer(object):
             self.loop = asyncio.get_event_loop()
             self.loop.run_until_complete(self.transport.start_server())
 
-    def serve_forever(self) -> None:
+    # does this also need a sync entrypoint?
+    async def serve_forever(self) -> None:
         """Handle requests forever.
         Starts the server loop; continuously calling :py:meth:`receive_one_message`
         to process the next incoming request.
         """
         while True:
-            self.loop.run_until_complete(self.receive_one_message())
+            await self.receive_one_message()
 
     async def receive_one_message(self) -> None:
         """Handle a single request.

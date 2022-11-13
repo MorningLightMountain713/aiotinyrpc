@@ -1,12 +1,14 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import pytest
 from unittest.mock import Mock
 
-from aiotinyrpc.exc import RPCError
+import pytest
+
 from aiotinyrpc.client import RPCClient, RPCProxy
-from aiotinyrpc.protocols import RPCProtocol, RPCResponse, RPCErrorResponse, RPCRequest
+from aiotinyrpc.exc import RPCError
+from aiotinyrpc.protocols import (RPCErrorResponse, RPCProtocol, RPCRequest,
+                                  RPCResponse)
 from aiotinyrpc.transports import ClientTransport
 
 

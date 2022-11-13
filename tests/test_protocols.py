@@ -3,8 +3,8 @@
 
 import pytest
 
-from aiotinyrpc.protocols.jsonrpc import JSONRPCProtocol
 from aiotinyrpc import RPCErrorResponse
+from aiotinyrpc.protocols.jsonrpc import JSONRPCProtocol
 
 
 @pytest.fixture(params=["jsonrpc"])

@@ -3,9 +3,9 @@
 
 import zmq
 
+from aiotinyrpc import RPCClient
 from aiotinyrpc.protocols.jsonrpc import JSONRPCProtocol
 from aiotinyrpc.transports.zmq import ZmqClientTransport
-from aiotinyrpc import RPCClient
 
 ctx = zmq.Context()
 

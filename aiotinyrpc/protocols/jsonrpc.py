@@ -11,25 +11,18 @@ Tinyrpc will detect the presence of jsonext and use it automatically.
 """
 
 import json
-import bson
 import sys
-from aiotinyrpc.exc import UnexpectedIDError
-from typing import Dict, Any, Union, Optional, List, Tuple, Callable, Generator
+from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
 
+import bson
+
+from aiotinyrpc.exc import UnexpectedIDError
+
+from .. import (InvalidParamsError, InvalidReplyError, InvalidRequestError,
+                MethodNotFoundError, RPCBatchProtocol, RPCBatchRequest,
+                RPCBatchResponse, RPCError, RPCErrorResponse, RPCRequest,
+                RPCResponse)
 from . import default_id_generator
-from .. import (
-    RPCBatchProtocol,
-    RPCRequest,
-    RPCResponse,
-    RPCErrorResponse,
-    InvalidRequestError,
-    MethodNotFoundError,
-    InvalidReplyError,
-    RPCError,
-    RPCBatchRequest,
-    RPCBatchResponse,
-    InvalidParamsError,
-)
 
 if "jsonext" in sys.modules:
     # jsonext was imported before this file, assume the intent is that

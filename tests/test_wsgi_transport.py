@@ -1,18 +1,16 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import pytest
-
-
-import six
 import gevent
-import gevent.queue
 import gevent.monkey
-from gevent.pywsgi import WSGIServer
+import gevent.queue
+import pytest
 import requests
+import six
+from gevent.pywsgi import WSGIServer
 
-from aiotinyrpc.transports.wsgi import WsgiServerTransport
 from aiotinyrpc.transports.http import HttpPostClientTransport
+from aiotinyrpc.transports.wsgi import WsgiServerTransport
 
 TEST_SERVER_ADDR = ("127.0.0.1", 49294)
 

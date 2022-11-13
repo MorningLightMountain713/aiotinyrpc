@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from typing import Callable, Tuple, Any
+from typing import Any, Callable, Tuple
 
 from . import ServerTransport
 

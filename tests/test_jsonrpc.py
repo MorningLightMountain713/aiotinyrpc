@@ -3,25 +3,18 @@
 
 import json
 
-import six
 import pytest
+import six
 
-from aiotinyrpc import (
-    MethodNotFoundError,
-    InvalidRequestError,
-    ServerError,
-    RPCError,
-    RPCResponse,
-    InvalidReplyError,
-)
-from aiotinyrpc.protocols.jsonrpc import (
-    JSONRPCParseError,
-    JSONRPCInvalidRequestError,
-    JSONRPCMethodNotFoundError,
-    JSONRPCInvalidParamsError,
-    JSONRPCInternalError,
-    JSONRPCErrorResponse,
-)
+from aiotinyrpc import (InvalidReplyError, InvalidRequestError,
+                        MethodNotFoundError, RPCError, RPCResponse,
+                        ServerError)
+from aiotinyrpc.protocols.jsonrpc import (JSONRPCErrorResponse,
+                                          JSONRPCInternalError,
+                                          JSONRPCInvalidParamsError,
+                                          JSONRPCInvalidRequestError,
+                                          JSONRPCMethodNotFoundError,
+                                          JSONRPCParseError)
 
 
 def _json_equal(a, b):

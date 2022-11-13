@@ -2,17 +2,15 @@
 # -*- coding: utf-8 -*-
 
 import msgpack
-import six
 import pytest
+import six
 
 from aiotinyrpc import InvalidReplyError, MethodNotFoundError
-from aiotinyrpc.protocols.msgpackrpc import (
-    MSGPACKRPCParseError,
-    MSGPACKRPCInvalidRequestError,
-    MSGPACKRPCMethodNotFoundError,
-    MSGPACKRPCInvalidParamsError,
-    MSGPACKRPCInternalError,
-)
+from aiotinyrpc.protocols.msgpackrpc import (MSGPACKRPCInternalError,
+                                             MSGPACKRPCInvalidParamsError,
+                                             MSGPACKRPCInvalidRequestError,
+                                             MSGPACKRPCMethodNotFoundError,
+                                             MSGPACKRPCParseError)
 
 
 def _msgpack_equal(a, b):

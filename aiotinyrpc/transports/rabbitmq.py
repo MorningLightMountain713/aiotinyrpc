@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from typing import Tuple, Any
+from typing import Any, Tuple
 
 import pika
 
-from . import ServerTransport, ClientTransport
+from . import ClientTransport, ServerTransport
 
 
 class RabbitMQServerTransport(ServerTransport):

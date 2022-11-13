@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 
 import queue as Queue
-from typing import Tuple, Any
+from typing import Any, Tuple
 
-from werkzeug.wrappers import Response, Request
+from werkzeug.wrappers import Request, Response
 
 from . import ServerTransport
 

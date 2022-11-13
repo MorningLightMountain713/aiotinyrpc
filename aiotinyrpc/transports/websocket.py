@@ -2,10 +2,11 @@
 # -*- coding: utf-8 -*-
 
 import queue
-from typing import Callable, Tuple, Any
+from typing import Any, Callable, Tuple
+
+from geventwebsocket.resource import Resource, WebSocketApplication
 
 from . import ServerTransport
-from geventwebsocket.resource import WebSocketApplication, Resource
 
 
 class WSServerTransport(ServerTransport):

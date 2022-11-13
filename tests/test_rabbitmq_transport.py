@@ -1,13 +1,12 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import pytest
 from unittest.mock import patch
 
-from aiotinyrpc.transports.rabbitmq import (
-    RabbitMQServerTransport,
-    RabbitMQClientTransport,
-)
+import pytest
+
+from aiotinyrpc.transports.rabbitmq import (RabbitMQClientTransport,
+                                            RabbitMQServerTransport)
 
 FAKE_REQUEST_MSG = b"a fake request message"
 FAKE_RESPONSE_MSG = b"a fake response message"

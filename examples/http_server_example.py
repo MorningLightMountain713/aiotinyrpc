@@ -2,12 +2,13 @@
 # -*- coding: utf-8 -*-
 
 import gevent
-import gevent.wsgi
 import gevent.queue
-from aiotinyrpc.protocols.jsonrpc import JSONRPCProtocol
-from aiotinyrpc.transports.wsgi import WsgiServerTransport
-from aiotinyrpc.server.gevent import RPCServerGreenlets
+import gevent.wsgi
+
 from aiotinyrpc.dispatch import RPCDispatcher
+from aiotinyrpc.protocols.jsonrpc import JSONRPCProtocol
+from aiotinyrpc.server.gevent import RPCServerGreenlets
+from aiotinyrpc.transports.wsgi import WsgiServerTransport
 
 dispatcher = RPCDispatcher()
 transport = WsgiServerTransport(queue_class=gevent.queue.Queue)

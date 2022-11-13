@@ -1,14 +1,16 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from unittest.mock import Mock
-import pytest
 import inspect
+from unittest.mock import Mock
 
+import pytest
+
+from aiotinyrpc import RPCBatchRequest, RPCBatchResponse, RPCRequest
 from aiotinyrpc.dispatch import RPCDispatcher, public
-from aiotinyrpc import RPCRequest, RPCBatchRequest, RPCBatchResponse
-from aiotinyrpc.protocols.jsonrpc import JSONRPCProtocol, JSONRPCInvalidParamsError
 from aiotinyrpc.exc import *
+from aiotinyrpc.protocols.jsonrpc import (JSONRPCInvalidParamsError,
+                                          JSONRPCProtocol)
 
 
 @pytest.fixture

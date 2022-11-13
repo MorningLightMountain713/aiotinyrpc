@@ -3,12 +3,12 @@
 
 from __future__ import absolute_import  # needed for zmq import
 
-from typing import Tuple, Any, Dict
+from typing import Any, Dict, Tuple
 
 import zmq
 
-from . import ServerTransport, ClientTransport
 from .. import exc
+from . import ClientTransport, ServerTransport
 
 
 class ZmqServerTransport(ServerTransport):

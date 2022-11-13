@@ -1,20 +1,15 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import sys
 import asyncio
+import sys
 from collections import namedtuple
-from typing import List, Any, Dict, Callable, Optional
+from typing import Any, Callable, Dict, List, Optional
 
-from .transports import ClientTransport
 from .exc import RPCError
-from .protocols import (
-    RPCErrorResponse,
-    RPCProtocol,
-    RPCRequest,
-    RPCResponse,
-    RPCBatchResponse,
-)
+from .protocols import (RPCBatchResponse, RPCErrorResponse, RPCProtocol,
+                        RPCRequest, RPCResponse)
+from .transports import ClientTransport
 
 RPCCall = namedtuple("RPCCall", "method args kwargs")
 """Defines the elements of an RPC call.

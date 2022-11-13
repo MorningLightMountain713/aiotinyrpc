@@ -3,12 +3,11 @@
 
 import pytest
 import six
-
 import zmq
 import zmq.green
 
-from aiotinyrpc.transports import ServerTransport, ClientTransport
-from aiotinyrpc.transports.zmq import ZmqServerTransport, ZmqClientTransport
+from aiotinyrpc.transports import ClientTransport, ServerTransport
+from aiotinyrpc.transports.zmq import ZmqClientTransport, ZmqServerTransport
 
 
 class DummyServerTransport(ServerTransport):

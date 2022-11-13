@@ -9,11 +9,13 @@ implements the request and will call that function returning its return value
 to the caller.
 """
 
-import inspect
 import asyncio
-from typing import Callable, Any, Dict, List, Optional, TypeVar, Union, overload
+import inspect
+from typing import (Any, Callable, Dict, List, Optional, TypeVar, Union,
+                    overload)
 
-from aiotinyrpc import RPCRequest, RPCResponse, RPCBatchRequest, RPCBatchResponse, exc
+from aiotinyrpc import (RPCBatchRequest, RPCBatchResponse, RPCRequest,
+                        RPCResponse, exc)
 
 # import exc
 

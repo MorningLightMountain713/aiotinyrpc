@@ -1,22 +1,15 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from . import default_id_generator
-from .. import (
-    RPCError,
-    RPCErrorResponse,
-    RPCProtocol,
-    RPCRequest,
-    RPCResponse,
-    InvalidRequestError,
-    MethodNotFoundError,
-    InvalidReplyError,
-)
+from typing import Any, Dict, Generator, List, Optional, Tuple, Union
 
 import msgpack
 import six
 
-from typing import Any, Dict, List, Optional, Tuple, Union, Generator
+from .. import (InvalidReplyError, InvalidRequestError, MethodNotFoundError,
+                RPCError, RPCErrorResponse, RPCProtocol, RPCRequest,
+                RPCResponse)
+from . import default_id_generator
 
 
 class FixedErrorMessageMixin(object):

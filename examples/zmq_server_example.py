@@ -3,10 +3,10 @@
 
 import zmq
 
-from aiotinyrpc.protocols.jsonrpc import JSONRPCProtocol
-from aiotinyrpc.transports.zmq import ZmqServerTransport
-from aiotinyrpc.server import RPCServer
 from aiotinyrpc.dispatch import RPCDispatcher
+from aiotinyrpc.protocols.jsonrpc import JSONRPCProtocol
+from aiotinyrpc.server import RPCServer
+from aiotinyrpc.transports.zmq import ZmqServerTransport
 
 ctx = zmq.Context()
 dispatcher = RPCDispatcher()

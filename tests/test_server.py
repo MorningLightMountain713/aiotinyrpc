@@ -1,14 +1,14 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import pytest
 from unittest.mock import Mock, call
 
+import pytest
+
+from aiotinyrpc.dispatch import RPCDispatcher
+from aiotinyrpc.protocols import RPCProtocol, RPCResponse
 from aiotinyrpc.server import RPCServer
 from aiotinyrpc.transports import ServerTransport
-from aiotinyrpc.protocols import RPCProtocol, RPCResponse
-from aiotinyrpc.dispatch import RPCDispatcher
-
 
 CONTEXT = "sapperdeflap"
 RECMSG = "out of receive_message"
