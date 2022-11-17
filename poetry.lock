@@ -288,6 +288,14 @@ toml = "*"
 testing = ["fields", "hunter", "process-tests", "six", "pytest-xdist", "virtualenv"]
 
 [[package]]
+name = "python-bitcoinlib"
+version = "0.11.2"
+description = "The Swiss Army Knife of the Bitcoin protocol."
+category = "main"
+optional = true
+python-versions = "*"
+
+[[package]]
 name = "pyzmq"
 version = "22.3.0"
 description = "Python bindings for 0MQ"
@@ -391,7 +399,7 @@ httpclient = ["requests", "gevent-websocket"]
 jsonext = []
 msgpack = ["msgpack"]
 rabbitmq = ["pika"]
-socket = ["pycryptodome", "pymongo"]
+socket = ["pycryptodome", "pymongo", "python-bitcoinlib"]
 websocket = ["gevent-websocket"]
 wsgi = ["werkzeug"]
 zmq = ["pyzmq"]
@@ -399,7 +407,7 @@ zmq = ["pyzmq"]
 [metadata]
 lock-version = "1.1"
 python-versions = "^3.9"
-content-hash = "5d2e302e83311f75c13bb927b21548d29b0c22379008cb8eb757b4539961ed45"
+content-hash = "46ad685911a252fd7f096c117a2d04722a3f23c2ceb70d2f9bf02b91a4622267"
 
 [metadata.files]
 atomicwrites = []
@@ -477,6 +485,7 @@ pymongo = []
 pyparsing = []
 pytest = []
 pytest-cov = []
+python-bitcoinlib = []
 pyzmq = []
 requests = []
 six = [
