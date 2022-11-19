@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from bitcoin.wallet import CBitcoinSecret, P2PKHBitcoinAddress
 from bitcoin.signmessage import BitcoinMessage, VerifyMessage, SignMessage
+from bitcoin.base58 import Base58Error
 from Crypto.Random import get_random_bytes
 
 
@@ -25,8 +26,13 @@ class SignatureAuthProvider(AuthProvider):
     def auth_message(self, msg):
         """Creates a message (non serialized) to be sent to the authenticator.
         In this case the message is a Bitcoin signed message"""
-        # ToDo: catch errors
-        secret = CBitcoinSecret(self.key)
+        # this happens if someone passes in bad key data. Upper layer can
+        # catch ValueError
+        try:
+            secret = CBitcoinSecret(self.key)
+        except Base58Error:
+            raise ValueError
+
         message = BitcoinMessage(msg)
         return {"signature": SignMessage(secret, message)}
 

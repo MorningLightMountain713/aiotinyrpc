@@ -140,7 +140,12 @@ class EncryptedSocketClientTransport(ClientTransport):
             return False
 
         msg = challenge.get("to_sign")
-        auth_message = self.auth_provider.auth_message(msg)
+        try:
+            auth_message = self.auth_provider.auth_message(msg)
+        except ValueError:
+            log.error("Malformed private key... you need to reset key")
+            return False
+
         res = await self.send_message(self.serialize(auth_message))
         res = self.deserialize(res)
         return res.get("authenticated", False)
