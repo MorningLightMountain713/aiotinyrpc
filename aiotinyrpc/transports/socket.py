@@ -133,6 +133,9 @@ class EncryptedSocketClientTransport(ClientTransport):
 
     async def authenticate(self):
         challenge = await self.wait_for_message()
+        if challenge == "EOF":
+            return False
+
         try:
             challenge = self.deserialize(challenge)
         except bson.errors.InvalidBSON:
@@ -150,21 +153,21 @@ class EncryptedSocketClientTransport(ClientTransport):
         res = self.deserialize(res)
         return res.get("authenticated", False)
 
-    def connect(self):
-        self.loop.run_until_complete(self._connect())
+    async def connect(self):
+        await self._connect()
 
         if not self.reader and not self.writer:
             return
 
         if self.auth_provider:
-            authenticated = self.loop.run_until_complete(self.authenticate())
+            authenticated = await self.authenticate()
             if not authenticated:
                 return
             log.info("Connection authenticated!")
 
         self._connected = True
 
-        self.loop.run_until_complete(self.setup_encryption())
+        await self.setup_encryption()
 
     async def _connect(self):
         """Connects to socket server. Tries a max of 3 times"""
@@ -200,7 +203,7 @@ class EncryptedSocketClientTransport(ClientTransport):
             log.error("EOF reached, socket closed")
             self._connected = False
             self.encrypted = False
-            return ""
+            return "EOF"
 
         message = data.rstrip(self.seperator)
         if self.encrypted:
@@ -224,10 +227,10 @@ class EncryptedSocketClientTransport(ClientTransport):
         if expect_reply:
             return await self.wait_for_message()
 
-    def disconnect(self):
+    async def disconnect(self):
         self._connected = False
         self.encrypted = False
-        self.loop.run_until_complete(self._close_socket())
+        await self._close_socket()
 
     async def _close_socket(self):
         """Lets other end know we're closed, then closes socket"""
@@ -239,7 +242,7 @@ class EncryptedSocketClientTransport(ClientTransport):
         self.writer = None
 
     def __del__(self):
-        self.disconnect()
+        self.loop.run_until_complete(self.disconnect())
 
 
 class EncryptedSocketServerTransport(ServerTransport):
@@ -389,17 +392,17 @@ class EncryptedSocketServerTransport(ServerTransport):
             "key_data": {},
         }
 
+        if self.verify_source_address and not await self.valid_source_ip(peer[0]):
+            log.warn("Source IP address not verified... dropping")
+            writer.close()
+            await writer.wait_closed()
+            return
+
         authenticated = True
         if self.auth_provider:
             authenticated = await self.authenticate(peer, reader, writer)
 
         if not authenticated:
-            return
-
-        if self.verify_source_address and not await self.valid_source_ip(peer[0]):
-            log.warn("Source IP address not verified... dropping")
-            writer.close()
-            await writer.wait_closed()
             return
 
         await self.encrypt_socket(reader, writer)

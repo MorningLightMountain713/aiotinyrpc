@@ -7,8 +7,13 @@ from collections import namedtuple
 from typing import Any, Callable, Dict, List, Optional
 
 from .exc import RPCError
-from .protocols import (RPCBatchResponse, RPCErrorResponse, RPCProtocol,
-                        RPCRequest, RPCResponse)
+from .protocols import (
+    RPCBatchResponse,
+    RPCErrorResponse,
+    RPCProtocol,
+    RPCRequest,
+    RPCResponse,
+)
 from .transports import ClientTransport
 
 RPCCall = namedtuple("RPCCall", "method args kwargs")
@@ -59,7 +64,7 @@ class RPCClient(object):
 
         return response
 
-    def call(
+    async def call(
         self, method: str, args: List = [], kwargs: Dict = {}, one_way: bool = False
     ) -> Any:
         """Calls the requested method and returns the result.
@@ -72,10 +77,9 @@ class RPCClient(object):
         :param kwargs: Keyword arguments to pass to the method.
         :param one_way: Whether or not a reply is desired.
         """
-        loop = asyncio.get_event_loop()
         req = self.protocol.create_request(method, args, kwargs, one_way)
 
-        rep = loop.run_until_complete(self._send_and_handle_reply(req, one_way))
+        rep = await self._send_and_handle_reply(req, one_way)
 
         if one_way:
             return
