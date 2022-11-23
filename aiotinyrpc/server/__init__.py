@@ -5,6 +5,7 @@ Defines and implements a single-threaded, single-process, synchronous server.
 """
 
 import asyncio
+
 # FIXME: needs (more) unittests
 # FIXME: needs checks for out-of-order, concurrency, etc as attributes
 from typing import Any
@@ -63,7 +64,7 @@ class RPCServer(object):
 
         if self.transport.is_async:
             self.loop = asyncio.get_event_loop()
-            self.loop.run_until_complete(self.transport.start_server())
+            self.loop.create_task(self.transport.start_server())
 
     # does this also need a sync entrypoint?
     async def serve_forever(self) -> None:
