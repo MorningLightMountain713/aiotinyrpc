@@ -4,9 +4,9 @@ import asyncio
 from typing import Any, Optional
 
 import bson
-from Crypto.Cipher import AES, PKCS1_OAEP
-from Crypto.PublicKey import RSA
-from Crypto.Random import get_random_bytes
+from Cryptodome.Cipher import AES, PKCS1_OAEP
+from Cryptodome.PublicKey import RSA
+from Cryptodome.Random import get_random_bytes
 
 from aiotinyrpc.log import log
 from aiotinyrpc.transports import ClientTransport, ServerTransport
