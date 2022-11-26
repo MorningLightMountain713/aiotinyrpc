@@ -6,6 +6,16 @@ from bitcoin.base58 import Base58Error
 from Cryptodome.Random import get_random_bytes
 from enum import Enum
 
+# from aiotinyrpc.transports.socketmessages import Message
+
+# from dataclasses import dataclass
+
+from aiotinyrpc.transports.socketmessages import (
+    ChallengeMessage,
+    ChallengeReplyMessage,
+    AuthReplyMessage,
+)
+
 
 class AuthProvider:
     """All auth providers inherit from this"""
@@ -35,12 +45,10 @@ class SignatureAuthProvider(AuthProvider):
             raise ValueError
 
         message = BitcoinMessage(msg)
-        return {
-            "signature": SignMessage(secret, message),
-        }
+        return ChallengeReplyMessage(SignMessage(secret, message))
 
-    def verify_auth(self, auth_msg: dict):
-        sig = auth_msg.get("signature")
+    def verify_auth(self, auth_msg: ChallengeReplyMessage):
+        sig = auth_msg.signature
         msg = BitcoinMessage(self.to_sign)
         self.auth_state = VerifyMessage(self.address, msg, sig)
         return self.auth_state
@@ -50,10 +58,7 @@ class SignatureAuthProvider(AuthProvider):
             raise ValueError("Address must be provided")
 
         self.to_sign = get_random_bytes(16).hex()
-        return {
-            "to_sign": self.to_sign,
-            "address": self.address,
-        }
+        return ChallengeMessage(self.to_sign, self.address)
 
     def auth_reply_message(self):
-        return {"authenticated": self.auth_state}
+        return AuthReplyMessage(self.auth_state)

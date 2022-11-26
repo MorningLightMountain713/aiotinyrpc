@@ -1,88 +1,51 @@
 from __future__ import annotations  # 3.10 style
 
 import asyncio
-from typing import Any, Optional
+from typing import Optional
 
 import bson
-from Cryptodome.Cipher import AES, PKCS1_OAEP
+from Cryptodome.Cipher import PKCS1_OAEP
 from Cryptodome.PublicKey import RSA
 from Cryptodome.Random import get_random_bytes
 
 from aiotinyrpc.log import log
 from aiotinyrpc.transports import ClientTransport, ServerTransport
+
+from aiotinyrpc.transports.socketmessages import (
+    RsaPublicKeyMessage,
+    SessionKeyMessage,
+    AesKeyMessage,
+    SerializedMessage,
+    ErrorMessage,
+    Message,
+    TestMessage,
+    ProxyMessage,
+    ProxyResponseMessage,
+    RpcReplyMessage,
+    RpcRequestMessage,
+)
 from aiotinyrpc.auth import AuthProvider
 
 import ssl
 import tempfile
 
-EOF = "EOF"
+from dataclasses import dataclass
 
 
-async def tls_handshake(
-    reader: asyncio.StreamReader,
-    writer: asyncio.StreamWriter,
-    ssl_context: Optional[ssl.SSLContext] = None,
-    server_side: bool = False,
-):
-    """Manually perform a TLS handshake over a stream"""
-
-    if not server_side and not ssl_context:
-        ssl_context = ssl.create_default_context()
-
-    transport = writer.transport
-    protocol = transport.get_protocol()
-    # otherwise we get the following in the logs:
-    #   returning true from eof_received() has no effect when using ssl warnings
-    protocol._over_ssl = True
-
-    loop = asyncio.get_event_loop()
-
-    new_transport = await loop.start_tls(
-        transport=transport,
-        protocol=protocol,
-        sslcontext=ssl_context,
-        server_side=server_side,
-    )
-
-    reader._transport = new_transport
-    writer._transport = new_transport
+@dataclass
+class KeyData:
+    rsa_key: str = ""
+    aes_key: str = ""
+    private: str = ""
+    public: str = ""
 
 
-def encrypt_aes_data(key, message: bytes) -> str:
-    """Take a bytes stream and AES key and encrypt it"""
-    cipher = AES.new(key, AES.MODE_EAX)
-    ciphertext, tag = cipher.encrypt_and_digest(message)
-    jdata = {
-        "nonce": cipher.nonce.hex(),
-        "tag": tag.hex(),
-        "ciphertext": ciphertext.hex(),
-    }
-    return bson.encode(jdata)
-
-
-def decrypt_aes_data(key, data: bytes) -> dict:
-    """Take a bytes stream and AES key and decrypt it"""
-    # ToDo: Error checking
-    try:
-        jdata = bson.decode(data)
-        nonce = bytes.fromhex(jdata["nonce"])
-        tag = bytes.fromhex(jdata["tag"])
-        ciphertext = bytes.fromhex(jdata["ciphertext"])
-        cipher = AES.new(key, AES.MODE_EAX, nonce)
-        msg = cipher.decrypt_and_verify(ciphertext, tag)
-    except ValueError:
-        raise
-    log.debug(msg)
-    return bson.decode(msg)
-
-
-def serialize(msg: Any) -> bytes:
-    """Converts any object to json and encodes in as bytes, reading for sending"""
-    return bson.encode(msg)
-
-
-def deserialize(msg: bytes) -> Any:
-    return bson.decode(msg)
+@dataclass
+class EncryptedSocket:
+    writer: asyncio.StreamWriter
+    reader: asyncio.StreamReader
+    key_data: KeyData = KeyData()
+    encrypted: bool = False
 
 
 class EncryptedSocketClientTransport(ClientTransport):
@@ -118,50 +81,79 @@ class EncryptedSocketClientTransport(ClientTransport):
         self.key = key
         self.ca = ca
 
-        # Removed this... up to the client how they want to proceed
+        # ToDo: maybe have a alway connected flag and if set, we connect here
         # self.connect()
 
-    def encrypt_aes_key(self, keypem: str, data: str) -> dict:
+    @staticmethod
+    async def tls_handshake(
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+        ssl_context: Optional[ssl.SSLContext] = None,
+        server_side: bool = False,
+    ):
+        """Manually perform a TLS handshake over a stream"""
+
+        if not server_side and not ssl_context:
+            ssl_context = ssl.create_default_context()
+
+        transport = writer.transport
+        protocol = transport.get_protocol()
+        # otherwise we get the following in the logs:
+        #   returning true from eof_received() has no effect when using ssl warnings
+        protocol._over_ssl = True
+
+        loop = asyncio.get_event_loop()
+
+        new_transport = await loop.start_tls(
+            transport=transport,
+            protocol=protocol,
+            sslcontext=ssl_context,
+            server_side=server_side,
+        )
+
+        reader._transport = new_transport
+        writer._transport = new_transport
+
+    @property
+    def connected(self) -> bool:
+        """If the socket is connected or not"""
+        return self._connected
+
+    def session_key_message(self, key_pem: str, aes_key: str) -> SessionKeyMessage:
         """Generate and encrypt AES session key with RSA public key"""
-        key = RSA.import_key(keypem)
+        key = RSA.import_key(key_pem)
         session_key = get_random_bytes(16)
         # Encrypt the session key with the public RSA key
         cipher_rsa = PKCS1_OAEP.new(key)
-        enc_session_key = cipher_rsa.encrypt(session_key)
+        rsa_enc_session_key = cipher_rsa.encrypt(session_key)
+        msg = AesKeyMessage(aes_key)
+        encypted_aes_msg = msg.encrypt(session_key)
 
-        # Encrypt the data with the AES session key
-        cipher_aes = AES.new(session_key, AES.MODE_EAX)
-        ciphertext, tag = cipher_aes.encrypt_and_digest(data)
-
-        msg = {
-            "enc_session_key": enc_session_key.hex(),
-            "nonce": cipher_aes.nonce.hex(),
-            "tag": tag.hex(),
-            "cipher": ciphertext.hex(),
-        }
-        return msg
+        return SessionKeyMessage(encypted_aes_msg.serialize(), rsa_enc_session_key)
 
     async def setup_forwarding(self):
-        msg = {"proxy_required": False, "proxy_target": ""}
-        if self.proxy_target:
-            msg["proxy_required"] = True
-            msg["proxy_target"] = self.proxy_target
-            msg["proxy_port"] = self.proxy_port
-            msg["proxy_ssl"] = self.proxy_ssl
+        # ToDo: is the bool necessary?
+        msg = ProxyMessage(
+            bool(self.proxy_target), self.proxy_target, self.proxy_port, self.proxy_ssl
+        )
 
-        resp = await self.send_message(serialize(msg))
-        resp = deserialize(resp).get("response")
+        data = await self.send_message(msg)
+        forwarding_active = data.response
 
-        if resp and self.proxy_target:  # from this point we are being proxied
+        # ToDo: need to deal with error situation if proxy target and not active
+        if (
+            forwarding_active and self.proxy_target
+        ):  # from this point we are being proxied
             if self.proxy_ssl:
                 await self.upgrade_socket()
-            if self.auth_provider and resp:
+            if self.auth_provider:
                 authenticated = await self.authenticate()
                 if not authenticated:
                     return False
                 log.info("Proxy Connection authenticated!")
-                msg = {"proxy_required": False, "proxy_target": ""}
-                resp = await self.send_message(serialize(msg))
+                msg = ProxyMessage()
+                # We are telling the target we don't need proxy
+                resp = await self.send_message(msg)
 
     async def setup_encryption(self):
         """Once the socket is connected, the encryption process begins.
@@ -173,29 +165,36 @@ class EncryptedSocketClientTransport(ClientTransport):
         6/ Encrypted flag is set - any further messages will be AES protected"""
 
         # ToDo: maybe get the other end to return a useful message here if authentication failed
-        rsa_public_key = await self.wait_for_message()
+        msg = await self.wait_for_message()
         # ToDo: log this
-        if rsa_public_key == EOF:
+        if isinstance(msg, ErrorMessage):
             self.writer.close()
             await self.writer.wait_closed()
             self._connected = False
             return
 
-        rsa_public_key = rsa_public_key.decode("utf-8")
+        rsa_public_key = msg.key.decode("utf-8")
         self.aeskey = get_random_bytes(16).hex().encode("utf-8")
         try:
-            encrypted_aes_key = self.encrypt_aes_key(rsa_public_key, self.aeskey)
+            session_key_message = self.session_key_message(rsa_public_key, self.aeskey)
         except ValueError:
+            # ToDo: move this to received message
             log.error("Malformed (or no) RSA key received... skipping")
             self.writer.close()
             await self.writer.wait_closed()
             self._connected = False
             return
 
-        test_message = await self.send_message(serialize(encrypted_aes_key))
-        decrypted_test_message = decrypt_aes_data(self.aeskey, test_message)
+        test_message = await self.send_message(session_key_message)
+        if isinstance(msg, ErrorMessage):
+            self.writer.close()
+            await self.writer.wait_closed()
+            self._connected = False
+            return
 
-        if not decrypted_test_message.get("text") == "TestEncryptionMessage":
+        decrypted_test_message = test_message.decrypt(self.aeskey)
+
+        if not decrypted_test_message.text == "TestEncryptionMessage":
             log.error("Malformed test aes message received... skipping")
             self.writer.close()
             await self.writer.wait_closed()
@@ -204,31 +203,24 @@ class EncryptedSocketClientTransport(ClientTransport):
 
         self.encrypted = True
 
-        reversed_fill = decrypted_test_message.get("fill")[::-1]
-        msg = {"text": "TestEncryptionMessageResponse", "fill": reversed_fill}
-        await self.send_message(serialize(msg), expect_reply=False)
+        reversed_fill = decrypted_test_message.fill[::-1]
+        msg = TestMessage(reversed_fill, "TestEncryptionMessageResponse")
+        await self.send_message(msg, expect_reply=False)
 
     async def authenticate(self):
         challenge = await self.wait_for_message()
-        if challenge == EOF:
+
+        if isinstance(challenge, ErrorMessage):
             return False
 
         try:
-            challenge = deserialize(challenge)
-        except bson.errors.InvalidBSON:
-            log.error("Invalid authenticate message received")
-            return False
-
-        msg = challenge.get("to_sign")
-        try:
-            auth_message = self.auth_provider.auth_message(msg)
+            auth_message = self.auth_provider.auth_message(challenge.to_sign)
         except ValueError:
             log.error("Malformed private key... you need to reset key")
             return False
 
-        res = await self.send_message(serialize(auth_message))
-        res = deserialize(res)
-        return res.get("authenticated", False)
+        res = await self.send_message(auth_message)
+        return res.authenticated
 
     async def connect(self):
         await self._connect()
@@ -266,11 +258,6 @@ class EncryptedSocketClientTransport(ClientTransport):
                 log.warn(f"Connection error connecting to {self._address}")
             await asyncio.sleep(n)
 
-    @property
-    def connected(self) -> bool:
-        """If the socket is connected or not"""
-        return self._connected
-
     async def wait_for_message(self) -> bytes:
         """Blocks waiting for a message on the socket until separator is received"""
         # ToDo: make this error handling a bit better. E.g. if authentication fails,
@@ -281,13 +268,15 @@ class EncryptedSocketClientTransport(ClientTransport):
             log.error("EOF reached, socket closed")
             self._connected = False
             self.encrypted = False
-            return EOF
+            return ErrorMessage("EOF reached... socket closed")
 
-        message = data.rstrip(self.separator)
+        data = data.rstrip(self.separator)
+        # ToDo: catch
+        message = SerializedMessage(data).deserialize()
+
         if self.encrypted:
-            message = decrypt_aes_data(self.aeskey, message)
-            log.debug(f"Received message (decoded): {message}")
-            message = serialize(message)
+            message = message.decrypt(self.aeskey)
+            log.debug(f"Received message (decrypted): {message}")
 
         return message
 
@@ -309,26 +298,37 @@ class EncryptedSocketClientTransport(ClientTransport):
         context.verify_mode = ssl.VerifyMode.CERT_REQUIRED
         context.set_ciphers("ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384")
 
-        await tls_handshake(
+        await self.tls_handshake(
             reader=self.reader,
             writer=self.writer,
             ssl_context=context,
         )
 
-    async def send_message(self, message: bytes, expect_reply: bool = True):
+    # ToDo: this interface is a bit murky. Called both internally and externally
+    # Need to split these so this is only called externally
+    async def send_message(
+        self, message: Message | bytes, expect_reply: bool = True
+    ) -> Message | None:
         """Writes data on the socket"""
+        # from upper RPC layer
+        if isinstance(message, bytes):
+            # should always be encrypted here?
+            message = RpcRequestMessage(message)
         if self.encrypted:
-            log.debug(f"Sending encrypted message (decoded): {bson.decode(message)}")
-            message = encrypt_aes_data(self.aeskey, message)
+            log.debug(f"Sending encrypted message: {message}")
+            message = message.encrypt(self.aeskey)
         else:
-            log.debug(f"Sending message in the clear (decoded): {bson.decode(message)}")
+            log.debug(f"Sending message in the clear: {message}")
 
-        self.writer.write(message + self.separator)
+        self.writer.write(message.serialize() + self.separator)
         await self.writer.drain()
         log.debug("Message sent!")
 
         if expect_reply:
-            return await self.wait_for_message()
+            res = await self.wait_for_message()
+            if isinstance(res, RpcReplyMessage):
+                res = res.msg
+            return res
 
     async def disconnect(self):
         self._connected = False
@@ -374,33 +374,31 @@ class EncryptedSocketServerTransport(ServerTransport):
         self.auth_provider = auth_provider
         self.ssl = ssl
 
-    def decrypt_aes_key(self, keypem: str, cipher: dict) -> str:
+    def parse_session_key_message(self, key_pem: str, msg: SessionKeyMessage) -> str:
         """Used by Node to decrypt and return the AES Session key using the RSA Key"""
-        private_key = RSA.import_key(keypem)
-        enc_session_key = bytes.fromhex(cipher["enc_session_key"])
-        nonce = bytes.fromhex(cipher["nonce"])
-        tag = bytes.fromhex(cipher["tag"])
-        ciphertext = bytes.fromhex(cipher["cipher"])
+        private_key = RSA.import_key(key_pem)
 
-        # Decrypt the session key with the private RSA key
+        enc_session_key = msg.rsa_encrypted_session_key
+
         cipher_rsa = PKCS1_OAEP.new(private_key)
         session_key = cipher_rsa.decrypt(enc_session_key)
 
-        # Decrypt the data with the AES session key
-        cipher_aes = AES.new(session_key, AES.MODE_EAX, nonce)
-        data = cipher_aes.decrypt_and_verify(ciphertext, tag)
-        return data
+        enc_aes_key_message = SerializedMessage(msg.aes_key_message).deserialize()
+
+        aes_key_message = enc_aes_key_message.decrypt(session_key)
+        return aes_key_message.aes_key
 
     async def encrypt_socket(self, reader, writer):
         peer = writer.get_extra_info("peername")
         self.generate_key_data(peer)
 
+        msg = RsaPublicKeyMessage(self.sockets[peer].key_data.public)
         # ToDo: does receive_on_socket need to return peer?
-        await self.send(writer, self.sockets[peer]["key_data"]["Public"])
+        await self.send(writer, msg.serialize())
 
         try:
             task = asyncio.create_task(self.receive_on_socket(peer, reader))
-            _, encrypted_aes_key = await asyncio.wait_for(task, timeout=10)
+            _, session_key_message = await asyncio.wait_for(task, timeout=10)
 
         except (TypeError, asyncio.TimeoutError):
             log.error("Incorrect (or no) encryption message received... dropping")
@@ -409,39 +407,43 @@ class EncryptedSocketServerTransport(ServerTransport):
             del self.sockets[peer]
             return
 
+        if isinstance(session_key_message, ErrorMessage):
+            log.error(f"Encrypt socket error: {session_key_message.error}")
+            writer.close()
+            await writer.wait_closed()
+            del self.sockets[peer]
+            return
+
         # ToDo: try / except
-        aeskey = self.decrypt_aes_key(
-            self.sockets[peer]["key_data"]["Private"], bson.decode(encrypted_aes_key)
+        aes_key = self.parse_session_key_message(
+            self.sockets[peer].key_data.private, session_key_message
         )
-        self.sockets[peer]["key_data"]["AESKEY"] = aeskey
+
+        self.sockets[peer].key_data.aes_key = aes_key
 
         # Send a test encryption request, always include random data
         random = get_random_bytes(16).hex()
-        test_msg = {"text": "TestEncryptionMessage", "fill": random}
+        test_msg = TestMessage(random)
+        encrypted_test_msg = test_msg.encrypt(aes_key)
 
-        enc_msg = bson.encode(test_msg)
-        # ToDo: this function should take dict, str or bytes
-        encrypted_test_msg = encrypt_aes_data(aeskey, enc_msg)
-        await self.send(writer, encrypted_test_msg)
+        await self.send(writer, encrypted_test_msg.serialize())
         _, res = await self.receive_on_socket(peer, reader)
-        response = decrypt_aes_data(aeskey, res)
+        response = res.decrypt(aes_key)
 
         if (
-            response.get("text") == "TestEncryptionMessageResponse"
-            and response.get("fill") == random[::-1]
+            response.text == "TestEncryptionMessageResponse"
+            and response.fill == random[::-1]
         ):
-            self.sockets[peer]["encrypted"] = True
-        log.info(f"Socket is encrypted: {self.sockets[peer]['encrypted']}")
+            self.sockets[peer].encrypted = True
+        log.info(f"Socket is encrypted: {self.sockets[peer].encrypted}")
 
     def generate_key_data(self, peer):
         rsa = RSA.generate(2048)
         rsa_private = rsa.export_key()
         rsa_public = rsa.publickey().export_key()
-        self.sockets[peer]["key_data"] = {
-            "RSAkey": rsa,
-            "Private": rsa_private,
-            "Public": rsa_public,
-        }
+        self.sockets[peer].key_data.rsa_key = rsa
+        self.sockets[peer].key_data.private = rsa_private
+        self.sockets[peer].key_data.public = rsa_public
 
     async def valid_source_ip(self, peer_ip) -> bool:
         """Called when connection is established to verify correct source IP"""
@@ -458,12 +460,12 @@ class EncryptedSocketServerTransport(ServerTransport):
 
     async def authenticate(self, peer, reader, writer) -> bool:
         # all received messages need error handling
-        challenge = self.auth_provider.challenge_message()
-        await self.send(writer, serialize(challenge))
+        challenge_msg = self.auth_provider.challenge_message()
+        await self.send(writer, challenge_msg.serialize())
 
         try:
             task = asyncio.create_task(self.receive_on_socket(peer, reader))
-            _, challenge_reply = await asyncio.wait_for(task, timeout=10)
+            _, challenge_reply_msg = await asyncio.wait_for(task, timeout=10)
 
         except (TypeError, asyncio.TimeoutError):
             log.warn("Malformed (or no) challenge reply... dropping")
@@ -472,9 +474,10 @@ class EncryptedSocketServerTransport(ServerTransport):
             del self.sockets[peer]
             return False
 
-        challenge_reply = deserialize(challenge_reply)
-        authenticated = self.auth_provider.verify_auth(challenge_reply)
-        await self.send(writer, serialize(self.auth_provider.auth_reply_message()))
+        authenticated = self.auth_provider.verify_auth(challenge_reply_msg)
+        reply_message = self.auth_provider.auth_reply_message()
+
+        await self.send(writer, reply_message.serialize())
         log.info(f"Auth provider authenticated: {authenticated}")
         if not authenticated:
             # ToDo: check this actually closes socket
@@ -484,10 +487,10 @@ class EncryptedSocketServerTransport(ServerTransport):
             return False
         return True
 
-    async def process_forwarding_messages(self, peer, reader, writer):
+    async def process_forwarding_message(self, peer, reader, writer):
         try:
             task = asyncio.create_task(self.receive_on_socket(peer, reader))
-            _, forwarding = await asyncio.wait_for(task, timeout=10)
+            _, forwarding_msg = await asyncio.wait_for(task, timeout=10)
 
         except (TypeError, asyncio.TimeoutError):
             log.warn("Malformed (or no) forwarding request... dropping")
@@ -495,13 +498,11 @@ class EncryptedSocketServerTransport(ServerTransport):
             await writer.wait_closed()
             return False
 
-        forwarding = deserialize(forwarding)
-        proxy_required = forwarding.get("proxy_required")
-        proxy_target = forwarding.get("proxy_target")
-        proxy_port = forwarding.get("proxy_port")
-        proxy_ssl = forwarding.get("proxy_ssl")
+        proxy_target = forwarding_msg.proxy_target
+        proxy_port = forwarding_msg.proxy_port
+        # proxy_ssl = forwarding_msg.proxy_ssl
 
-        if proxy_required:
+        if forwarding_msg.proxy_required:
             return (proxy_target, proxy_port)
         else:
             return (False, False)
@@ -543,25 +544,6 @@ class EncryptedSocketServerTransport(ServerTransport):
             writer.close()
             await writer.wait_closed()
 
-    # async def upgrade_socket(self, peer, local_cert, local_key, ca_cert):
-    #     reader = self.sockets[peer]["reader"]
-    #     writer = self.sockets[peer]["writer"]
-
-    #     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    #     context.load_cert_chain(local_cert, keyfile=local_key)
-    #     context.load_verify_locations(cafile=ca_cert)
-    #     context.check_hostname = False
-    #     context.verify_mode = ssl.VerifyMode.CERT_REQUIRED
-    #     # ToDo: check these
-    #     context.set_ciphers("ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384")
-
-    #     await tls_handshake(
-    #         reader=reader,
-    #         writer=writer,
-    #         ssl_context=context,
-    #         server_side=True,
-    #     )
-
     async def handle_client(self, reader, writer):
         peer = writer.get_extra_info("peername")
         log.info(f"Peer connected: {peer}")
@@ -572,12 +554,7 @@ class EncryptedSocketServerTransport(ServerTransport):
             await writer.wait_closed()
             return
 
-        self.sockets[peer] = {
-            "encrypted": False,
-            "reader": reader,
-            "writer": writer,
-            "key_data": {},
-        }
+        self.sockets[peer] = EncryptedSocket(writer, reader)
 
         authenticated = True
         if self.auth_provider:
@@ -587,36 +564,40 @@ class EncryptedSocketServerTransport(ServerTransport):
         if not authenticated:
             return
 
-        # ToDo: this need quite a bit of work
-        host, port = await self.process_forwarding_messages(peer, reader, writer)
-        if host:
-            connected = await self.setup_forwarding(host, port, reader, writer)
-            await self.send(writer, serialize({"response": connected}))
+        msg = ProxyResponseMessage(False)
 
-            if not connected:
+        host, port = await self.process_forwarding_message(peer, reader, writer)
+        if host:  # forwarding required
+            success = await self.setup_forwarding(host, port, reader, writer)
+            msg.response = success
+            await self.send(writer, msg.serialize())
+
+            if not success:
                 writer.close()
                 await writer.wait_closed()
                 del self.sockets[peer]
             return
-        else:
-            await self.send(writer, serialize({"response": False}))
-            await self.encrypt_socket(reader, writer)
+        # need to respond here, it doesn't really mean the same thing though
+        await self.send(writer, msg.serialize())
+        await self.encrypt_socket(reader, writer)
 
-        running = True
-
-        while running:
+        while True:
             message = await asyncio.wait_for(self.receive_on_socket(peer, reader), None)
-
-            if message:
-                log.debug(
-                    f"Message received (decrypted and decoded): {bson.decode(message[1])})"
-                )
-                self.messages.append(message)
-            else:  # Socket closed
+            # ToDo: fix this up
+            # At this point, the only thing we should be receiving are ErrorMessages, or a
+            # tuple of context and RpcRequestMessage.
+            if isinstance(message, ErrorMessage):
+                # Socket closed
                 writer.close()
                 await writer.wait_closed()
                 del self.sockets[peer]
-                running = False
+                break
+
+            log.debug(
+                f"Message received (decrypted and decoded): {bson.decode(message[1].msg)})"
+            )
+            # ToDo: message[1] is RpcRequestMessage, tidy this up a bit
+            self.messages.append((message[0], message[1].msg))
 
     async def stop_server(self):
         for peer in self.sockets.copy():
@@ -649,15 +630,16 @@ class EncryptedSocketServerTransport(ServerTransport):
     async def receive_on_socket(self, peer, reader) -> tuple | None:
         # ToDo: does this ever happen?
         if reader.at_eof():
+            # This probably shouldn't happen yeah?
             log.info(f"Remote peer {peer} sent EOF, closing socket")
-            self.sockets[peer]["writer"].close()
-            await self.sockets[peer]["writer"].wait_closed()
+            self.sockets[peer].writer.close()
+            await self.sockets[peer].writer.wait_closed()
             del self.sockets[peer]
-            return None
+            return ErrorMessage("Reader is at EOF")
         try:
             data = await reader.readuntil(separator=self.separator)
         except asyncio.exceptions.IncompleteReadError:
-            return None
+            return ErrorMessage("Reader is at EOF")
         except asyncio.LimitOverrunError as e:
             data = []
             while True:
@@ -669,13 +651,10 @@ class EncryptedSocketServerTransport(ServerTransport):
             data = b"".join(data)
 
         message = data.rstrip(self.separator)
-
-        if self.sockets[peer]["encrypted"]:
-            message = decrypt_aes_data(
-                self.sockets[peer]["key_data"]["AESKEY"], message
-            )
-            message = bson.encode(message)
-
+        # ToDO: catch
+        message = SerializedMessage(message).deserialize()
+        if self.sockets[peer].encrypted:
+            message = message.decrypt(self.sockets[peer].key_data.aes_key)
         return (peer, message)
 
     # receive message and send_reply are the external functions called by the RPC server
@@ -685,15 +664,17 @@ class EncryptedSocketServerTransport(ServerTransport):
             await asyncio.sleep(0.05)
 
         addr, message = self.messages.pop(0)
+        # message = message.as_dict()
         return addr, message
 
-    async def send(self, writer, reply):
-        writer.write(reply + self.separator)
+    async def send(self, writer: asyncio.StreamWriter, msg: bytes):
+        writer.write(msg + self.separator)
         await writer.drain()
 
-    async def send_reply(self, context: tuple, reply: bytes):
-        if self.sockets[context]["encrypted"]:
-            reply = encrypt_aes_data(self.sockets[context]["key_data"]["AESKEY"], reply)
+    async def send_reply(self, context: tuple, data: bytes):
+        msg = RpcReplyMessage(data)
+        # this should always be True
+        if self.sockets[context].encrypted:
+            msg = msg.encrypt(self.sockets[context].key_data.aes_key)
 
-        writer = self.sockets[context]["writer"]
-        await self.send(writer, reply)
+        await self.send(self.sockets[context].writer, msg.serialize())
