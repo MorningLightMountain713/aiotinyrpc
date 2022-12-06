@@ -11,14 +11,12 @@ to the caller.
 
 import asyncio
 import inspect
-from typing import (Any, Callable, Dict, List, Optional, TypeVar, Union,
-                    overload)
+from typing import Any, Callable, Dict, List, Optional, TypeVar, Union, overload
+import functools
 
-from aiotinyrpc import (RPCBatchRequest, RPCBatchResponse, RPCRequest,
-                        RPCResponse, exc)
+from aiotinyrpc import RPCBatchRequest, RPCBatchResponse, RPCRequest, RPCResponse, exc
 
 # import exc
-
 
 T = TypeVar("T")
 
@@ -87,6 +85,7 @@ class RPCDispatcher(object):
         self.method_map = {}
         self.subdispatchers = {}
         self.loop = asyncio.get_event_loop()
+        self._storage = {}
 
     @overload
     def create(self, name: Callable[..., T]) -> Callable[..., T]:
@@ -98,7 +97,12 @@ class RPCDispatcher(object):
     ) -> Callable[[Callable[..., T]], Callable[..., T]]:
         ...
 
-    def create(self, name=None):
+    def pass_storage(self, f):
+        func = functools.partial(f, self._storage)
+        func.__name__ = f.__name__
+        return func
+
+    def create(self, name=None, pass_context=False):
         """Convenient decorator.
 
         Allows easy registering of functions to this dispatcher. Example:
@@ -126,7 +130,9 @@ class RPCDispatcher(object):
             return name
 
         def _(f):
+            f.pass_context = pass_context
             self.add_method(f, name=name)
+
             return f
 
         return _
@@ -246,7 +252,6 @@ class RPCDispatcher(object):
             The :py:exc:`~tinyrpc.exc.ServerError` is raised for any kind of exception not
             raised by the called function itself or :py:exc:`~tinyrpc.exc.MethodNotFoundError`.
         """
-
         if hasattr(request, "create_batch_response"):
             # need to create tasks, then await the tasks
             results = [await self._dispatch(req, caller) for req in request]
@@ -276,6 +281,7 @@ class RPCDispatcher(object):
             if caller is not None:
                 if inspect.iscoroutinefunction(method):
                     result = await caller(method, request.args, request.kwargs)
+
                 else:
                     result = await self.loop.run_in_executor(
                         None, caller, method, request.args, request.kwargs

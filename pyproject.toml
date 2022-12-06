@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "aiotinyrpc"
-version = "0.8.0"
+version = "0.8.1"
 description = "\"An aio version of tinyrpc\""
 authors = ["David White <dr.white.nz@gmail.com>"]
 license = "MIT"

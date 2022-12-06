@@ -114,5 +114,4 @@ class RPCServer(object):
             if self.transport.is_async:
                 await self.transport.send_reply(context, result)
             else:
-                print("Non async send_reply")
                 self.transport.send_reply(context, result)
