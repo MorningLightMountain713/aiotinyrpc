@@ -298,7 +298,8 @@ class JSONRPCErrorResponse(RPCErrorResponse):
         :return: The serialized encoded error object.
         :rtype: bytes
         """
-        return json_dumps(self._to_dict()).encode()
+        return bson.encode(self._to_dict())
+        # return json_dumps(self._to_dict()).encode()
 
 
 def _get_code_message_and_data(error: Union[Exception, str]) -> Tuple[int, str, Any]:
@@ -628,6 +629,7 @@ class JSONRPCProtocol(RPCBatchProtocol):
 
         try:
             # rep = json.loads(data)
+            # print(data)
             rep = bson.decode(data)
         except Exception as e:
             raise InvalidReplyError(e)

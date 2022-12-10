@@ -81,11 +81,18 @@ def public(name=None):
 class RPCDispatcher(object):
     """Stores name-to-method mappings."""
 
-    def __init__(self) -> None:
+    def __init__(self, plugin_name: str = "", required_packages: list = []) -> None:
+        self.plugin_name = plugin_name
         self.method_map = {}
         self.subdispatchers = {}
         self.loop = asyncio.get_event_loop()
+        self.required_packages = required_packages
         self._storage = {}
+
+    def __add__(self, other):
+        self.method_map = {**self.method_map, **other.method_map}
+        self._storage = {**self._storage, **other._storage}
+        return self
 
     @overload
     def create(self, name: Callable[..., T]) -> Callable[..., T]:
@@ -137,7 +144,7 @@ class RPCDispatcher(object):
 
         return _
 
-    def add_subdispatch(self, dispatcher: "RPCDispatcher", prefix: str = ""):
+    def add_plugin(self, dispatcher: "RPCDispatcher"):
         """Adds a subdispatcher, possibly in its own namespace.
 
         :param dispatcher: The dispatcher to add as a subdispatcher.
@@ -145,7 +152,10 @@ class RPCDispatcher(object):
         :param str prefix: A prefix. All of the new subdispatchers methods will be
                        available as prefix + their original name.
         """
-        self.subdispatchers.setdefault(prefix, []).append(dispatcher)
+        self.subdispatchers.setdefault(dispatcher.plugin_name, []).append(dispatcher)
+
+    def list_plugins(self):
+        return [plugin for plugin in self.subdispatchers]
 
     def add_method(self, f: Callable, name: str = None) -> None:
         """Add a method to the dispatcher.
@@ -211,7 +221,7 @@ class RPCDispatcher(object):
             dispatch.add_method(f, f._rpc_public_name)
 
         # add to dispatchers
-        self.add_subdispatch(dispatch, prefix)
+        self.add_plugin(dispatch, prefix)
 
     async def dispatch(
         self, request: Union[RPCRequest, RPCBatchRequest], caller: Callable = None

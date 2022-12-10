@@ -123,14 +123,18 @@ class RPCClient(object):
                 threads.append(self._send_and_handle_reply(req, False, tr, True))
             return threads
 
-    def get_proxy(self, prefix: str = "", one_way: bool = False) -> "RPCProxy":
+    def get_proxy(
+        self, prefix: str = "", one_way: bool = False, plugins: list = []
+    ) -> "RPCProxy":
         """Convenience method for creating a proxy.
 
         :param prefix: Passed on to :py:class:`~tinyrpc.client.RPCProxy`.
         :param one_way: Passed on to :py:class:`~tinyrpc.client.RPCProxy`.
         :return: :py:class:`~tinyrpc.client.RPCProxy` instance.
         """
-        return RPCProxy(self, prefix, one_way)
+        # plugins = await self.call("list_plugins", one_way=False)
+
+        return RPCProxy(self, prefix, one_way, plugins)
 
     def batch_call(self, calls: List[RPCCallTo]) -> RPCBatchResponse:
         """Experimental, use at your own peril."""
@@ -155,11 +159,21 @@ class RPCProxy(object):
     """
 
     def __init__(
-        self, client: RPCClient, prefix: str = "", one_way: bool = False
+        self,
+        client: RPCClient,
+        prefix: str = "",
+        one_way: bool = False,
+        plugins: list = [],
     ) -> None:
         self.client = client
         self.prefix = prefix
         self.one_way = one_way
+        self.plugins = plugins
+
+        for plugin in plugins:
+            setattr(
+                self, plugin, RPCProxy(self.client, prefix=plugin, one_way=self.one_way)
+            )
 
     def __getattr__(self, name: str) -> Callable:
         """Returns a proxy function that, when called, will call a function
