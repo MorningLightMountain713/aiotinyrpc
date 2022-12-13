@@ -276,7 +276,9 @@ class EncryptedSocketClientTransport(ClientTransport):
 
         if self.encrypted:
             message = message.decrypt(self.aeskey)
-            log.debug(f"Received message (decrypted): {message}")
+            log.debug(
+                f"Received message (decrypted and decoded): {bson.decode(message.msg)}"
+            )
 
         return message
 
@@ -536,7 +538,6 @@ class EncryptedSocketServerTransport(ServerTransport):
         return False
 
     async def pipe(self, reader, writer):
-        # ToDo: suspect this isn't closing writer facing keeper (local_writer)
         try:
             while not reader.at_eof():
                 writer.write(await reader.read(2048))
