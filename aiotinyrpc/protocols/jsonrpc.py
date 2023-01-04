@@ -791,5 +791,4 @@ class JSONRPCProtocol(RPCBatchProtocol):
     def _caller(self, method: Callable, args: List[Any], kwargs: Dict[str, Any]) -> Any:
         # Custom dispatcher called by RPCDispatcher._dispatch().
         # Override this when you need to call the method with additional parameters for example.
-
         return method(*args, **kwargs)

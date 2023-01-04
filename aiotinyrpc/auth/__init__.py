@@ -1,20 +1,15 @@
 from __future__ import annotations
 
-from bitcoin.wallet import CBitcoinSecret, P2PKHBitcoinAddress
-from bitcoin.signmessage import BitcoinMessage, VerifyMessage, SignMessage
-from bitcoin.base58 import Base58Error
-from Cryptodome.Random import get_random_bytes
-from enum import Enum
-
-# from aiotinyrpc.transports.socketmessages import Message
-
-# from dataclasses import dataclass
-
-from aiotinyrpc.transports.socketmessages import (
+from aiotinyrpc.transports.socket.messages import (
     ChallengeMessage,
     ChallengeReplyMessage,
     AuthReplyMessage,
 )
+
+from bitcoin.wallet import CBitcoinSecret, P2PKHBitcoinAddress
+from bitcoin.signmessage import BitcoinMessage, VerifyMessage, SignMessage
+from bitcoin.base58 import Base58Error
+from Cryptodome.Random import get_random_bytes
 
 
 class AuthProvider:
@@ -31,10 +26,11 @@ class SignatureAuthProvider(AuthProvider):
     def __init__(self, key: str | None = None, address: str | None = None):
         self.key = key
         self.address = address
+        self.challenges = {}
 
         self.to_sign = None
 
-    def auth_message(self, msg):
+    def auth_message(self, id, to_sign):
         """Creates a message (non serialized) to be sent to the authenticator.
         In this case the message is a Bitcoin signed message"""
         # this happens if someone passes in bad key data. Upper layer can
@@ -44,21 +40,29 @@ class SignatureAuthProvider(AuthProvider):
         except Base58Error:
             raise ValueError
 
-        message = BitcoinMessage(msg)
-        return ChallengeReplyMessage(SignMessage(secret, message))
+        message = BitcoinMessage(to_sign)
+        return ChallengeReplyMessage(id, SignMessage(secret, message))
 
     def verify_auth(self, auth_msg: ChallengeReplyMessage):
         sig = auth_msg.signature
-        msg = BitcoinMessage(self.to_sign)
-        self.auth_state = VerifyMessage(self.address, msg, sig)
-        return self.auth_state
+        to_sign = self.challenges.pop(auth_msg.id, None)
+        if not to_sign:
+            auth_state = False
+        else:
+            msg = BitcoinMessage(to_sign)
+            auth_state = VerifyMessage(self.address, msg, sig)
+        return auth_state
 
-    def challenge_message(self):
+    def generate_challenge(self, msg: ChallengeMessage):
         if not self.address:
             raise ValueError("Address must be provided")
 
-        self.to_sign = get_random_bytes(16).hex()
-        return ChallengeMessage(self.to_sign, self.address)
+        id = get_random_bytes(16).hex()
+        to_sign = get_random_bytes(16).hex()
+        self.challenges.update({id: to_sign})
 
-    def auth_reply_message(self):
-        return AuthReplyMessage(self.auth_state)
+        msg.id = id
+        msg.to_sign = to_sign
+        msg.address = self.address
+
+        return msg

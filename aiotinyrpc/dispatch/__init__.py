@@ -291,7 +291,6 @@ class RPCDispatcher(object):
             if caller is not None:
                 if inspect.iscoroutinefunction(method):
                     result = await caller(method, request.args, request.kwargs)
-
                 else:
                     result = await self.loop.run_in_executor(
                         None, caller, method, request.args, request.kwargs

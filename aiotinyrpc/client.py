@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import asyncio
+import secrets
 import sys
 from collections import namedtuple
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List
 
 from .exc import RPCError
 from .protocols import (
@@ -41,9 +41,33 @@ class RPCClient(object):
     :type transport: ClientTransport
     """
 
-    def __init__(self, protocol: RPCProtocol, transport: ClientTransport) -> None:
+    def __init__(
+        self, protocol: RPCProtocol, transport: ClientTransport, id: str = ""
+    ) -> None:
         self.protocol = protocol
         self.transport = transport
+        self.id = id if id else secrets.token_urlsafe(12)
+        self._sid = ""  # socketio id
+
+    @property
+    def is_proxied(self):
+        return bool(self.transport.proxy_target)
+
+    @property
+    def proxy_host_port(self) -> tuple:
+        return self.transport.proxy_source
+
+    @property
+    def connected(self):
+        return self.transport.connected
+
+    @property
+    def sid(self):
+        return self._sid
+
+    @sid.setter
+    def sid(self, value):
+        self._sid = value
 
     async def _send_and_handle_reply(self, req: RPCRequest, one_way: bool = False):
         if self.transport.is_async:
@@ -65,7 +89,11 @@ class RPCClient(object):
         return response
 
     async def call(
-        self, method: str, args: List = [], kwargs: Dict = {}, one_way: bool = False
+        self,
+        method: str,
+        args: List = [],
+        kwargs: Dict = {},
+        one_way: bool = False,
     ) -> Any:
         """Calls the requested method and returns the result.
 
@@ -172,7 +200,13 @@ class RPCProxy(object):
 
         for plugin in plugins:
             setattr(
-                self, plugin, RPCProxy(self.client, prefix=plugin, one_way=self.one_way)
+                self,
+                plugin,
+                RPCProxy(
+                    self.client,
+                    prefix=plugin,
+                    one_way=self.one_way,
+                ),
             )
 
     def __getattr__(self, name: str) -> Callable:
@@ -180,6 +214,9 @@ class RPCProxy(object):
         name ``name`` on the client associated with the proxy.
         """
         proxy_func = lambda *args, **kwargs: self.client.call(
-            self.prefix + name, args, kwargs, one_way=self.one_way
+            self.prefix + name,
+            args,
+            kwargs,
+            one_way=self.one_way,
         )
         return proxy_func

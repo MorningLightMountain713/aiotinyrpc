@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from typing import Any
 import sys
 
-import bson
 from Cryptodome.Cipher import AES
+
 
 # Abstract
 class Message:
@@ -16,7 +16,11 @@ class Message:
         return bson.encode(self.__dict__)
 
     def deserialize(self) -> Any:
-        decoded = bson.decode(self.msg)
+        try:
+            decoded = bson.decode(self.msg)
+        except bson.errors.InvalidBSON:
+            print(self.msg)
+            raise
         klass = getattr(sys.modules[__name__], decoded["_type"])
         del decoded["_type"]
         return klass(**decoded)
@@ -27,35 +31,30 @@ class Message:
         ciphertext, tag = cipher.encrypt_and_digest(self.serialize())
         return EncryptedMessage(cipher.nonce.hex(), tag.hex(), ciphertext.hex())
 
-    # def as_dict(self):
-    #     return self.__dict__
-
-
-# ToDO: change this module name to messages and remove message from every class
-# cleaner
-
-
-# these 3 shouldn't be here. They are specific to signature auth but I was getting
-# grief with circular imports
+    def as_dict(self):
+        return self.__dict__
 
 
 @dataclass
 class ChallengeReplyMessage(Message):
-    signature: str
+    id: str = ""
+    signature: str = ""
+    close_connection: bool = False
 
 
 @dataclass
 class ChallengeMessage(Message):
-    to_sign: str
-    address: str
+    id: str = ""
+    to_sign: str = ""
+    address: str = ""
+    auth_required: bool = True
+    source: tuple = ()
 
 
 @dataclass
 class AuthReplyMessage(Message):
-    authenticated: bool
-
-
-###
+    authenticated: bool = False
+    source: tuple = ()
 
 
 @dataclass
@@ -70,12 +69,28 @@ class SerializedMessage(Message):
 
 @dataclass
 class RpcReplyMessage(Message):
-    msg: bytes
+    payload: bytes
 
 
 @dataclass
 class RpcRequestMessage(Message):
-    msg: bytes
+    payload: bytes
+
+
+@dataclass
+class PtyMessage(Message):
+    data: bytes
+
+
+@dataclass
+class PtyResizeMessage(Message):
+    rows: int = 0
+    cols: int = 0
+
+
+@dataclass
+class PtyClosedMessage(Message):
+    reason: str
 
 
 @dataclass
@@ -125,4 +140,19 @@ class ProxyMessage(Message):
 
 @dataclass
 class ProxyResponseMessage(Message):
-    response: bool
+    success: bool
+    socket_details: tuple = ()
+
+
+@dataclass
+class FingerprintMessage(Message):
+    ...
+
+
+@dataclass
+class FingerprintResponseMessage(Message):
+    verify_source_address: bool
+    whitelisted_addresses: list
+    authentication_required: bool
+    authentication_address: str
+    ssl: bool
