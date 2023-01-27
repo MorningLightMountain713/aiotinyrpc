@@ -11,6 +11,7 @@ from Cryptodome.Cipher import AES
 # Abstract
 class Message:
     def serialize(self) -> bytes:
+        # ToDo: convert types to ints, lower overhead
         self._type = self.__class__.__name__
         # ToDo: recurse
         return bson.encode(self.__dict__)
@@ -19,7 +20,7 @@ class Message:
         try:
             decoded = bson.decode(self.msg)
         except bson.errors.InvalidBSON:
-            print(self.msg)
+            # print(self.msg)
             raise
         klass = getattr(sys.modules[__name__], decoded["_type"])
         del decoded["_type"]

@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 import asyncio
-
+import re
 
 from aiotinyrpc.transports import ClientTransport
 
@@ -46,6 +46,7 @@ from .symbols import (
     PROXY_AUTH_DENIED,
     AUTH_ADDRESS_REQUIRED,
     PROXY_AUTH_ADDRESS_REQUIRED,
+    NO_SOCKET,
 )
 
 
@@ -310,12 +311,11 @@ class EncryptedSocketClientTransport(ClientTransport):
 
     async def connect(self):
         log.info(f"Transport id: {id(self)} Connecting...")
-        # if self._connecting:
-        #     log.info("Connecting... adding channel")
-        #     self.channels += 1
+        if self._connecting:
+            log.info("Connecting... adding channel")
+            self.channels += 1
 
         while self._connecting or self._disconnecting:
-            print("connecting")
             await asyncio.sleep(0.01)
 
         if self.channels:
@@ -328,6 +328,7 @@ class EncryptedSocketClientTransport(ClientTransport):
 
         if not self.reader and not self.writer:
             self._connecting = False
+            self.failed_on = NO_SOCKET
             log.error("No reader or writer... Error connecting")
             return
 
@@ -336,9 +337,12 @@ class EncryptedSocketClientTransport(ClientTransport):
         await self.challenge_complete_event.wait()
         self.challenge_complete_event.clear()
 
+        self.channels += 1
+
         if self.auth_required and not self.auth_provider:
             self.auth_error = "Auth required and no auth provider set"
             log.error(self.auth_error)
+            await self.disconnect()
             self._connecting = False
             return
 
@@ -348,6 +352,7 @@ class EncryptedSocketClientTransport(ClientTransport):
 
             if not self.authenticated:
                 log.error("Authentication error")
+                await self.disconnect()
                 self._connecting = False
                 return
 
@@ -361,7 +366,7 @@ class EncryptedSocketClientTransport(ClientTransport):
         await self.encrypted_event.wait()
         self.encrypted_event.clear()
 
-        self.channels += 1
+        # self.channels += 1
         log.debug(f"Connection encrypted Total channels: {self.channels}")
         self._connected = True
         self._connecting = False
@@ -408,6 +413,7 @@ class EncryptedSocketClientTransport(ClientTransport):
         )
 
     async def read_socket_loop(self):
+        extra_messages = []
         while self.reader and not self.reader.at_eof():
             try:
                 data = await self.reader.readuntil(self.separator)
@@ -421,55 +427,85 @@ class EncryptedSocketClientTransport(ClientTransport):
                 self._connected = False
                 self.encrypted = False
                 break
+            except asyncio.LimitOverrunError as e:
+                print("LIMIT OVERRUN!!!!")
+                data = []
+                
+                while True:
+                    current = await self.reader.read(64000)
+                    if current.endswith(self.separator):
+                        data.append(current)
+                        break
+
+                    data.append(current)
+                
+                count = re.findall(b"\<\?!!\?\\>", data[-1])
+
+                # split messages
+                if len(count) > 1:
+                    multi_message_bytes = data.pop()
+                    extra_messages = multi_message_bytes.split(b"<?!!?>")
+                    # or just remove the last item?
+                    extra_messages = list(filter(None, extra_messages))
+                    last_data = extra_messages.pop(0)
+                    data.append(last_data+b"<?!!?>")
+
+                data = b"".join(data)
             except Exception as e:
+                print("in read socket loop")
                 print(repr(e))
 
-            data = data.rstrip(self.separator)
+            message = data.rstrip(self.separator)
 
-            # ToDo: catch
-            try:
-                message = SerializedMessage(data).deserialize()
-            except Exception as e:
-                print(repr(e))
-            log.debug(f"Received : {type(message).__name__}")
+            all_messages = [message, *extra_messages]
+            extra_messages = []
+            
+            for message in all_messages:
+                # ToDo: catch
+                try:
+                    message = SerializedMessage(message).deserialize()
+                except Exception as e:
+                    print("can't deserialize in for")
+                    print(repr(e))
+                log.debug(f"Received : {type(message).__name__}")
 
-            if self.encrypted:
-                message = message.decrypt(self.aeskey)
+                if self.encrypted:
+                    message = message.decrypt(self.aeskey)
 
-            if isinstance(message, PtyMessage):
-                our_socket = self.writer.get_extra_info("sockname")
-                await self.on_pty_data_callback(our_socket, message.data)
-                continue
+                if isinstance(message, PtyMessage):
+                    our_socket = self.writer.get_extra_info("sockname")
+                    await self.on_pty_data_callback(our_socket, message.data)
+                    continue
 
-            if isinstance(message, RpcReplyMessage):
-                await self.messages.put(message)
-                continue
+                if isinstance(message, RpcReplyMessage):
+                    await self.messages.put(message)
+                    continue
 
-            if isinstance(message, (ChallengeMessage, AuthReplyMessage)):
-                await self.authentication_message_handler(message)
-                continue
+                if isinstance(message, (ChallengeMessage, AuthReplyMessage)):
+                    await self.authentication_message_handler(message)
+                    continue
 
-            if isinstance(message, ProxyResponseMessage):
-                asyncio.create_task(self.forwarding_message_handler(message))
-                continue
+                if isinstance(message, ProxyResponseMessage):
+                    asyncio.create_task(self.forwarding_message_handler(message))
+                    continue
 
-            if isinstance(message, (RsaPublicKeyMessage, TestMessage)):
-                await self.encryption_message_handler(message)
-                continue
+                if isinstance(message, (RsaPublicKeyMessage, TestMessage)):
+                    await self.encryption_message_handler(message)
+                    continue
 
-            # This is our test message as we're not encrypted yet
-            # it could be part of the handler above but more clear here
-            if isinstance(message, EncryptedMessage):
-                await self.encryption_message_handler(message)
-                continue
+                # This is our test message as we're not encrypted yet
+                # it could be part of the handler above but more clear here
+                if isinstance(message, EncryptedMessage):
+                    await self.encryption_message_handler(message)
+                    continue
 
-            if isinstance(message, PtyClosedMessage):
-                our_socket = self.writer.get_extra_info("sockname")
-                await self.on_pty_closed_callback(our_socket)
-                continue
+                if isinstance(message, PtyClosedMessage):
+                    our_socket = self.writer.get_extra_info("sockname")
+                    await self.on_pty_closed_callback(our_socket)
+                    continue
 
-            else:
-                log.error(f"Unknown message: {message}")
+                else:
+                    log.error(f"Unknown message: {message}")
 
         log.debug("Finished read socket loop")
 
@@ -530,12 +566,14 @@ class EncryptedSocketClientTransport(ClientTransport):
         self.proxy_authenticated = False
         self.auth_required = True
         self.proxy_auth_required = True
-        self.failed_on = ""
+        # self.failed_on = ""
 
     async def disconnect(self):
-        sockname = self.writer.get_extra_info("sockname")
+        sockname = "Not connected"
+        if self.writer:
+            sockname = self.writer.get_extra_info("sockname")
         log.info(
-            f"Disconnect called for local {sockname}. Total channels before: {self.channels}"
+            f"Disconnect called for socket: {sockname}. Total channels before: {self.channels}"
         )
         self.channels -= 1
         if self.channels:

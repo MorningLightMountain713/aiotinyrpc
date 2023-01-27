@@ -66,7 +66,6 @@ class RPCServer(object):
             self.loop = asyncio.get_event_loop()
             self.loop.create_task(self.transport.start_server())
 
-    # does this also need a sync entrypoint?
     async def serve_forever(self) -> None:
         """Handle requests forever.
         Starts the server loop; continuously calling :py:meth:`receive_one_message`

@@ -3,11 +3,12 @@ from __future__ import annotations  # 3.10 style
 import asyncio
 from typing import BinaryIO
 
+import binascii
 import bson
 from Cryptodome.Cipher import PKCS1_OAEP
 from Cryptodome.PublicKey import RSA
 from Cryptodome.Random import get_random_bytes
-
+import re
 from aiotinyrpc.log import log
 from aiotinyrpc.transports import ServerTransport
 
@@ -118,9 +119,7 @@ class EncryptablePeer:
         self.writer.write(msg + self.separator)
         await self.writer.drain()
 
-    def handle_pty_message(self, message):
-        host, msg = message
-
+    def handle_pty_message(self, msg):
         if not self.pty:
             return
 
@@ -252,7 +251,7 @@ class EncryptedSocketServerTransport(ServerTransport):
         if msg.close_connection:
             # client handler will do this
             # self.peers.destroy_peer(peer.id)
-            log.info("Client requested close connecting... closing")
+            log.info("Client requested close connection... closing")
             peer.challenge_complete_event.set()
             return
 
@@ -317,7 +316,6 @@ class EncryptedSocketServerTransport(ServerTransport):
 
     async def setup_forwarding(self, host, port, peer) -> tuple:
         """Connects to socket server. Tries a max of 3 times"""
-        log.info(f"Proxying connection from {peer.id} to {host} on port {port}")
         retries = 3
 
         proxy_reader = proxy_writer = None
@@ -344,27 +342,42 @@ class EncryptedSocketServerTransport(ServerTransport):
             asyncio.create_task(pipe1)
             asyncio.create_task(pipe2)
 
-            return (True, proxy_writer.get_extra_info("sockname"))
+            source = peer.writer.get_extra_info("sockname")
+            proxy_source = proxy_writer.get_extra_info("sockname")
+            log.info(
+                f"Proxy path: {peer.id} <-> {source} <-> {proxy_source} <-> ({host}, {port})"
+            )
+
+            return (True, proxy_source)
         return (False, None)
 
-    async def proxy_pty(self, peer):
+    async def proxy_pty(self, peer_id):
         log.info("Received proxy pty request... forwarding local pty to remote socket")
-        task = self.sockets[peer].proxy_pty(self.separator)
+        peer = self.peers.get_peer(peer_id)
+
+        task = peer.proxy_pty(self.separator)
         asyncio.create_task(task)
 
-    def attach_pty(self, pid, pty, peer):
-        log.info(f"Attaching to pty for peer: {peer}")
+    # this is called externally, don't have access to peer object,
+    # have to get it
+    def attach_pty(self, pid, pty, peer_id):
+        log.info(f"Attaching to pty for peer: {peer_id}")
+        peer = self.peers.get_peer(peer_id)
+
         try:
-            self.sockets[peer].pty = pty
-            self.sockets[peer].pid = pid
+            peer.pty = pty
+            peer.pid = pid
         except Exception as e:
+            print("in attach_pty")
             print(repr(e))
 
-    def detach_pty(self, peer):
+    def detach_pty(self, peer_id):
         log.info("detaching pty")
-        self.sockets[peer].pty = None
-        if self.sockets[peer].pid:
-            os.kill(self.sockets[peer].pid, signal.SIGKILL)
+        peer = self.peers.get_peer(peer_id)
+
+        peer.pty = None
+        if peer.pid:
+            os.kill(peer.pid, signal.SIGKILL)
 
     async def pipe(self, reader, writer, callback=None, id=""):
         try:
@@ -411,21 +424,41 @@ class EncryptedSocketServerTransport(ServerTransport):
         log.info("Handle client finished... waiting on read loop")
 
     async def read_socket_loop(self, peer):
+        extra_messages = []
         while peer.reader and not peer.proxied and not peer.reader.at_eof():
             try:
                 data = await peer.reader.readuntil(separator=self.separator)
             except asyncio.exceptions.IncompleteReadError:
-                log.info(f"Reader is at EOF. Peer: {peer.id}")
+                log.debug(f"Reader is at EOF. Peer: {peer.id}")
+                break
+            except ConnectionResetError:
+                log.warn(f"Connect was reset by peer: {peer.id}")
+                # do we need to tidy up here?
                 break
             except asyncio.LimitOverrunError as e:
                 data = []
+                
                 while True:
                     current = await peer.reader.read(64000)
                     if current.endswith(self.separator):
                         data.append(current)
                         break
+
                     data.append(current)
+                
+                count = re.findall(b"\<\?!!\?\\>", data[-1])
+
+                # split messages
+                if len(count) > 1:
+                    multi_message_bytes = data.pop()
+                    extra_messages = multi_message_bytes.split(b"<?!!?>")
+                    # or just remove the last item?
+                    extra_messages = list(filter(None, extra_messages))
+                    last_data = extra_messages.pop(0)
+                    data.append(last_data+b"<?!!?>")
+
                 data = b"".join(data)
+
             except BrokenPipeError:
                 # ToDo: fix this?
                 log.error(f"Broken pipe")
@@ -433,43 +466,47 @@ class EncryptedSocketServerTransport(ServerTransport):
 
             message = data.rstrip(self.separator)
 
-            try:
-                message = SerializedMessage(message).deserialize()
-            except Exception as e:
-                # ToDo: fix this
-                log.error(repr(e))
-                continue
+            all_messages = [message, *extra_messages]
+            extra_messages = []
+            
+            for message in all_messages:
+                try:
+                    message = SerializedMessage(message).deserialize()
+                except Exception as e:
+                    # ToDo: fix this
+                    log.error(repr(e))
+                    continue
 
-            log.debug(f"Received : {type(message).__name__}")
+                log.debug(f"Received : {type(message).__name__}")
 
-            if peer.encrypted:
-                message = message.decrypt(peer.key_data.aes_key)
+                if peer.encrypted:
+                    message = message.decrypt(peer.key_data.aes_key)
 
-            if isinstance(message, (PtyMessage, PtyResizeMessage)):
-                peer.handle_pty_message(message)
-                continue
+                if isinstance(message, (PtyMessage, PtyResizeMessage)):
+                    peer.handle_pty_message(message)
+                    continue
 
-            if isinstance(message, ChallengeReplyMessage):
-                await self.handle_auth_message(peer, message)
-                continue
+                if isinstance(message, ChallengeReplyMessage):
+                    await self.handle_auth_message(peer, message)
+                    continue
 
-            # Encrypted message is the test message (peer isn't encrypted)
-            if isinstance(message, (SessionKeyMessage, EncryptedMessage)):
-                await self.handle_encryption_message(peer, message)
-                continue
+                # Encrypted message is the test message (peer isn't encrypted)
+                if isinstance(message, (SessionKeyMessage, EncryptedMessage)):
+                    await self.handle_encryption_message(peer, message)
+                    continue
 
-            if isinstance(message, ProxyMessage):
-                await self.handle_forwarding_message(peer, message)
-                continue
+                if isinstance(message, ProxyMessage):
+                    await self.handle_forwarding_message(peer, message)
+                    continue
 
-            if isinstance(message, RpcRequestMessage):
-                log.debug(
-                    f"Message received (decrypted and decoded): {bson.decode(message.payload)})"
-                )
-                await self.rpc_messages.put((peer.id, message.payload))
+                if isinstance(message, RpcRequestMessage):
+                    log.debug(
+                        f"Message received (decrypted and decoded): {bson.decode(message.payload)})"
+                    )
+                    await self.rpc_messages.put((peer.id, message.payload))
 
-            else:
-                log.error(f"Unknown message: {message}")
+                else:
+                    log.error(f"Unknown message: {message}")
 
         log.debug(f"Read socket loop finished. peer.proxied: {peer.proxied}")
         if not peer.proxied:

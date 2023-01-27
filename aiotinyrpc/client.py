@@ -9,10 +9,8 @@ from typing import Any, Callable, Dict, List
 from .exc import RPCError
 from .protocols import (
     RPCBatchResponse,
-    RPCErrorResponse,
     RPCProtocol,
     RPCRequest,
-    RPCResponse,
 )
 from .transports import ClientTransport
 
@@ -47,7 +45,6 @@ class RPCClient(object):
         self.protocol = protocol
         self.transport = transport
         self.id = id if id else secrets.token_urlsafe(12)
-        self._sid = ""  # socketio id
 
     @property
     def is_proxied(self):
@@ -61,13 +58,6 @@ class RPCClient(object):
     def connected(self):
         return self.transport.connected
 
-    @property
-    def sid(self):
-        return self._sid
-
-    @sid.setter
-    def sid(self, value):
-        self._sid = value
 
     async def _send_and_handle_reply(self, req: RPCRequest, one_way: bool = False):
         if self.transport.is_async:
@@ -152,7 +142,7 @@ class RPCClient(object):
             return threads
 
     def get_proxy(
-        self, prefix: str = "", one_way: bool = False, plugins: list = []
+        self, prefix: str = "", plugins: list = []
     ) -> "RPCProxy":
         """Convenience method for creating a proxy.
 
@@ -162,7 +152,7 @@ class RPCClient(object):
         """
         # plugins = await self.call("list_plugins", one_way=False)
 
-        return RPCProxy(self, prefix, one_way, plugins)
+        return RPCProxy(self, prefix, plugins)
 
     def batch_call(self, calls: List[RPCCallTo]) -> RPCBatchResponse:
         """Experimental, use at your own peril."""
@@ -190,12 +180,11 @@ class RPCProxy(object):
         self,
         client: RPCClient,
         prefix: str = "",
-        one_way: bool = False,
         plugins: list = [],
     ) -> None:
         self.client = client
         self.prefix = prefix
-        self.one_way = one_way
+        self.one_way = False
         self.plugins = plugins
 
         for plugin in plugins:
@@ -205,18 +194,26 @@ class RPCProxy(object):
                 RPCProxy(
                     self.client,
                     prefix=plugin,
-                    one_way=self.one_way,
                 ),
             )
+
+    def notify(self):
+        """Sets the next rpc call as a notification"""
+        self.one_way = True
 
     def __getattr__(self, name: str) -> Callable:
         """Returns a proxy function that, when called, will call a function
         name ``name`` on the client associated with the proxy.
         """
+        # this is necessary. Even copy.copy doesn't work. For some reason this is pass by reference if using self.one_way
+        tmp_one_way = self.one_way
         proxy_func = lambda *args, **kwargs: self.client.call(
             self.prefix + name,
             args,
             kwargs,
-            one_way=self.one_way,
+            one_way=tmp_one_way,
         )
+        # above was pass by value
+        self.one_way = False
+
         return proxy_func
