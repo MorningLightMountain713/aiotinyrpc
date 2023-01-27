@@ -71,8 +71,12 @@ class RPCServer(object):
         Starts the server loop; continuously calling :py:meth:`receive_one_message`
         to process the next incoming request.
         """
-        while True:
-            await self.receive_one_message()
+        try:
+            while True:
+                await self.receive_one_message()
+        finally:
+            self.loop.shutdown_asyncgens()
+            self.loop.close()
 
     async def receive_one_message(self) -> None:
         """Handle a single request.
