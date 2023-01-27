@@ -75,7 +75,7 @@ class RPCServer(object):
             while True:
                 await self.receive_one_message()
         finally:
-            self.loop.shutdown_asyncgens()
+            await self.loop.shutdown_asyncgens()
             self.loop.close()
 
     async def receive_one_message(self) -> None:
