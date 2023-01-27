@@ -16,7 +16,7 @@ from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
 
 import bson
 
-from aiotinyrpc.exc import UnexpectedIDError
+from fluxrpc.exc import UnexpectedIDError
 
 from .. import (
     InvalidParamsError,

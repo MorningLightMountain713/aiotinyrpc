@@ -5,10 +5,10 @@ from unittest.mock import Mock, call
 
 import pytest
 
-from aiotinyrpc.dispatch import RPCDispatcher
-from aiotinyrpc.protocols import RPCProtocol, RPCResponse
-from aiotinyrpc.server import RPCServer
-from aiotinyrpc.transports import ServerTransport
+from fluxrpc.dispatch import RPCDispatcher
+from fluxrpc.protocols import RPCProtocol, RPCResponse
+from fluxrpc.server import RPCServer
+from fluxrpc.transports import ServerTransport
 
 CONTEXT = "sapperdeflap"
 RECMSG = "out of receive_message"

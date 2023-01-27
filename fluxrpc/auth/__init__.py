@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from aiotinyrpc.transports.socket.messages import (
+from fluxrpc.transports.socket.messages import (
     ChallengeMessage,
     ChallengeReplyMessage,
     AuthReplyMessage,

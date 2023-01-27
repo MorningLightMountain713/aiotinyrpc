@@ -3,8 +3,8 @@
 
 import pytest
 
-from aiotinyrpc import RPCErrorResponse
-from aiotinyrpc.protocols.jsonrpc import JSONRPCProtocol
+from fluxrpc import RPCErrorResponse
+from fluxrpc.protocols.jsonrpc import JSONRPCProtocol
 
 
 @pytest.fixture(params=["jsonrpc"])
@@ -62,7 +62,7 @@ def test_parses_error_response(protocol):
 
 
 def test_default_id_generator():
-    from aiotinyrpc.protocols import default_id_generator
+    from fluxrpc.protocols import default_id_generator
 
     g = default_id_generator(1)
     assert next(g) == 1

@@ -14,7 +14,7 @@ import inspect
 from typing import Any, Callable, Dict, List, Optional, TypeVar, Union, overload
 import functools
 
-from aiotinyrpc import RPCBatchRequest, RPCBatchResponse, RPCRequest, RPCResponse, exc
+from fluxrpc import RPCBatchRequest, RPCBatchResponse, RPCRequest, RPCResponse, exc
 
 # import exc
 

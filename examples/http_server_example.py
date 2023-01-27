@@ -5,10 +5,10 @@ import gevent
 import gevent.queue
 import gevent.wsgi
 
-from aiotinyrpc.dispatch import RPCDispatcher
-from aiotinyrpc.protocols.jsonrpc import JSONRPCProtocol
-from aiotinyrpc.server.gevent import RPCServerGreenlets
-from aiotinyrpc.transports.wsgi import WsgiServerTransport
+from fluxrpc.dispatch import RPCDispatcher
+from fluxrpc.protocols.jsonrpc import JSONRPCProtocol
+from fluxrpc.server.gevent import RPCServerGreenlets
+from fluxrpc.transports.wsgi import WsgiServerTransport
 
 dispatcher = RPCDispatcher()
 transport = WsgiServerTransport(queue_class=gevent.queue.Queue)

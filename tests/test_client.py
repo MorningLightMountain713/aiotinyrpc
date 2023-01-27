@@ -5,11 +5,11 @@ from unittest.mock import Mock
 
 import pytest
 
-from aiotinyrpc.client import RPCClient, RPCProxy
-from aiotinyrpc.exc import RPCError
-from aiotinyrpc.protocols import (RPCErrorResponse, RPCProtocol, RPCRequest,
+from fluxrpc.client import RPCClient, RPCProxy
+from fluxrpc.exc import RPCError
+from fluxrpc.protocols import (RPCErrorResponse, RPCProtocol, RPCRequest,
                                   RPCResponse)
-from aiotinyrpc.transports import ClientTransport
+from fluxrpc.transports import ClientTransport
 
 
 @pytest.fixture(params=["test_method1", "method2", "CamelCasedMethod"])

@@ -6,10 +6,10 @@ import json
 import pytest
 import six
 
-from aiotinyrpc import (InvalidReplyError, InvalidRequestError,
+from fluxrpc import (InvalidReplyError, InvalidRequestError,
                         MethodNotFoundError, RPCError, RPCResponse,
                         ServerError)
-from aiotinyrpc.protocols.jsonrpc import (JSONRPCErrorResponse,
+from fluxrpc.protocols.jsonrpc import (JSONRPCErrorResponse,
                                           JSONRPCInternalError,
                                           JSONRPCInvalidParamsError,
                                           JSONRPCInvalidRequestError,
@@ -26,7 +26,7 @@ def _json_equal(a, b):
 
 @pytest.fixture
 def prot():
-    from aiotinyrpc.protocols.jsonrpc import JSONRPCProtocol
+    from fluxrpc.protocols.jsonrpc import JSONRPCProtocol
 
     return JSONRPCProtocol()
 
@@ -255,7 +255,7 @@ def test_request_generation(prot):
 
 def test_jsonrpc_spec_v2_example1(prot):
     # reset id counter
-    from aiotinyrpc.protocols import default_id_generator
+    from fluxrpc.protocols import default_id_generator
 
     prot._id_generator = default_id_generator(1)
 
@@ -289,7 +289,7 @@ def test_jsonrpc_spec_v2_example1(prot):
 
 def test_jsonrpc_spec_v2_example2(prot):
     # reset id counter
-    from aiotinyrpc.protocols import default_id_generator
+    from fluxrpc.protocols import default_id_generator
 
     prot._id_generator = default_id_generator(3)
 

@@ -6,8 +6,8 @@ import six
 import zmq
 import zmq.green
 
-from aiotinyrpc.transports import ClientTransport, ServerTransport
-from aiotinyrpc.transports.zmq import ZmqClientTransport, ZmqServerTransport
+from fluxrpc.transports import ClientTransport, ServerTransport
+from fluxrpc.transports.zmq import ZmqClientTransport, ZmqServerTransport
 
 
 class DummyServerTransport(ServerTransport):

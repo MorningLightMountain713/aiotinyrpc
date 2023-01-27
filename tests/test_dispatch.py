@@ -6,10 +6,10 @@ from unittest.mock import Mock
 
 import pytest
 
-from aiotinyrpc import RPCBatchRequest, RPCBatchResponse, RPCRequest
-from aiotinyrpc.dispatch import RPCDispatcher, public
-from aiotinyrpc.exc import *
-from aiotinyrpc.protocols.jsonrpc import (JSONRPCInvalidParamsError,
+from fluxrpc import RPCBatchRequest, RPCBatchResponse, RPCRequest
+from fluxrpc.dispatch import RPCDispatcher, public
+from fluxrpc.exc import *
+from fluxrpc.protocols.jsonrpc import (JSONRPCInvalidParamsError,
                                           JSONRPCProtocol)
 
 

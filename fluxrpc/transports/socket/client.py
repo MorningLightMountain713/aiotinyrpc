@@ -4,9 +4,9 @@ from typing import Callable, Optional
 import asyncio
 import re
 
-from aiotinyrpc.transports import ClientTransport
+from fluxrpc.transports import ClientTransport
 
-from aiotinyrpc.transports.socket.messages import (
+from fluxrpc.transports.socket.messages import (
     RsaPublicKeyMessage,
     SessionKeyMessage,
     AesKeyMessage,
@@ -33,9 +33,9 @@ from Cryptodome.Cipher import PKCS1_OAEP
 from Cryptodome.PublicKey import RSA
 from Cryptodome.Random import get_random_bytes
 
-from aiotinyrpc.log import log
+from fluxrpc.log import log
 
-from aiotinyrpc.auth import (
+from fluxrpc.auth import (
     AuthProvider,
     ChallengeMessage,
     AuthReplyMessage,

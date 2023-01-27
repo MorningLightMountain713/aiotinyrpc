@@ -5,8 +5,8 @@ import msgpack
 import pytest
 import six
 
-from aiotinyrpc import InvalidReplyError, MethodNotFoundError
-from aiotinyrpc.protocols.msgpackrpc import (MSGPACKRPCInternalError,
+from fluxrpc import InvalidReplyError, MethodNotFoundError
+from fluxrpc.protocols.msgpackrpc import (MSGPACKRPCInternalError,
                                              MSGPACKRPCInvalidParamsError,
                                              MSGPACKRPCInvalidRequestError,
                                              MSGPACKRPCMethodNotFoundError,
@@ -19,7 +19,7 @@ def _msgpack_equal(a, b):
 
 @pytest.fixture
 def prot():
-    from aiotinyrpc.protocols.msgpackrpc import MSGPACKRPCProtocol
+    from fluxrpc.protocols.msgpackrpc import MSGPACKRPCProtocol
 
     return MSGPACKRPCProtocol()
 
@@ -208,7 +208,7 @@ def test_request_generation(prot):
 
 def test_jsonrpc_spec_v2_example1(prot):
     # reset id counter
-    from aiotinyrpc.protocols import default_id_generator
+    from fluxrpc.protocols import default_id_generator
 
     prot._id_generator = default_id_generator(1)
 

@@ -1,7 +1,7 @@
 [tool.poetry]
-name = "aiotinyrpc"
-version = "0.8.3"
-description = "\"An aio version of tinyrpc\""
+name = "fluxrpc"
+version = "0.9.0"
+description = "\"A sercure RPC provider for Flux\""
 authors = ["David White <dr.white.nz@gmail.com>"]
 license = "MIT"
 

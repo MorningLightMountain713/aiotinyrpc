@@ -9,10 +9,10 @@ from Cryptodome.Cipher import PKCS1_OAEP
 from Cryptodome.PublicKey import RSA
 from Cryptodome.Random import get_random_bytes
 import re
-from aiotinyrpc.log import log
-from aiotinyrpc.transports import ServerTransport
+from fluxrpc.log import log
+from fluxrpc.transports import ServerTransport
 
-from aiotinyrpc.transports.socket.messages import (
+from fluxrpc.transports.socket.messages import (
     RsaPublicKeyMessage,
     ChallengeMessage,
     SessionKeyMessage,
@@ -27,7 +27,7 @@ from aiotinyrpc.transports.socket.messages import (
     PtyResizeMessage,
     PtyClosedMessage,
 )
-from aiotinyrpc.auth import AuthProvider, ChallengeReplyMessage, AuthReplyMessage
+from fluxrpc.auth import AuthProvider, ChallengeReplyMessage, AuthReplyMessage
 
 import ssl
 

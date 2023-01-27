@@ -10,9 +10,9 @@ import asyncio
 # FIXME: needs checks for out-of-order, concurrency, etc as attributes
 from typing import Any
 
-from aiotinyrpc import RPCProtocol, exc
-from aiotinyrpc.dispatch import RPCDispatcher
-from aiotinyrpc.transports import ServerTransport
+from fluxrpc import RPCProtocol, exc
+from fluxrpc.dispatch import RPCDispatcher
+from fluxrpc.transports import ServerTransport
 
 
 class RPCServer(object):

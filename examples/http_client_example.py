@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from aiotinyrpc import RPCClient
-from aiotinyrpc.protocols.jsonrpc import JSONRPCProtocol
-from aiotinyrpc.transports.http import HttpPostClientTransport
+from fluxrpc import RPCClient
+from fluxrpc.protocols.jsonrpc import JSONRPCProtocol
+from fluxrpc.transports.http import HttpPostClientTransport
 
 rpc_client = RPCClient(
     JSONRPCProtocol(), HttpPostClientTransport("http://127.0.0.1:5000/")

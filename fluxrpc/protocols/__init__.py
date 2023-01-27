@@ -8,7 +8,7 @@ import itertools
 from abc import ABC
 from typing import Any, Dict, Generator, List, Optional, Union
 
-from aiotinyrpc import exc
+from fluxrpc import exc
 
 
 class RPCRequest(object):
