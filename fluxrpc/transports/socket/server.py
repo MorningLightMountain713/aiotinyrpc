@@ -1,40 +1,56 @@
 from __future__ import annotations  # 3.10 style
 
 import asyncio
+import binascii
+import fcntl
+import io
+import os
+import re
+import select
+import signal
+import ssl
+
+# pty stuff
+import struct
+import tarfile
+import termios
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import BinaryIO
 
-import binascii
+import aiofiles
 import bson
 from Cryptodome.Cipher import PKCS1_OAEP
 from Cryptodome.PublicKey import RSA
 from Cryptodome.Random import get_random_bytes
-import re
+
+from fluxrpc.auth import AuthProvider, AuthReplyMessage, ChallengeReplyMessage
 from fluxrpc.log import log
 from fluxrpc.transports import ServerTransport
-
 from fluxrpc.transports.socket.messages import (
-    RsaPublicKeyMessage,
     ChallengeMessage,
-    SessionKeyMessage,
-    SerializedMessage,
-    TestMessage,
+    EncryptedMessage,
+    FileEntryStreamMessage,
     ProxyMessage,
     ProxyResponseMessage,
-    RpcRequestMessage,
-    EncryptedMessage,
-    RpcReplyMessage,
+    PtyClosedMessage,
     PtyMessage,
     PtyResizeMessage,
-    PtyClosedMessage,
+    RpcReplyMessage,
+    RpcRequestMessage,
+    RsaPublicKeyMessage,
+    SerializedMessage,
+    SessionKeyMessage,
+    TestMessage,
 )
-from fluxrpc.auth import AuthProvider, ChallengeReplyMessage, AuthReplyMessage
 
-import ssl
 
-from dataclasses import dataclass, field
-
-# pty stuff
-import struct, fcntl, termios, select, os, signal
+def bytes_to_human(num, suffix="B"):
+    for unit in ["", "K", "M", "G", "T", "P", "E", "Z"]:
+        if abs(num) < 1024.0:
+            return f"{num:3.1f}{unit}{suffix}"
+        num /= 1024.0
+    return f"{num:.1f}Yi{suffix}"
 
 
 @dataclass
@@ -113,11 +129,38 @@ class EncryptablePeer:
     timer: asyncio.Task | None = None
     challenge_complete_event: asyncio.Event = field(default_factory=asyncio.Event)
     forwarding_event: asyncio.Event = field(default_factory=asyncio.Event)
+    fh: dict[str, BinaryIO] = field(default_factory=dict)
 
     async def send(self, msg: bytes):
         log.debug(f"Sending message: {bson.decode(msg)}")
         self.writer.write(msg + self.separator)
         await self.writer.drain()
+
+    # shouldn't this be run in executor?
+    # async def write_tarfile(self, path: Path, tar: tarfile.TarFile):
+    #     tar.extractall(str(path))
+    #     tar.close()
+    #     self.fh = None
+
+    async def handle_file_stream_message(self, msg: FileEntryStreamMessage):
+        if msg.path not in self.fh:
+            log.info(f"Server transport: New file stream received {msg.path}")
+            p = Path(msg.path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            self.fh[msg.path] = await aiofiles.open(p, "wb")
+            # tar = tarfile.open(fileobj=self.fh, mode="r|bz2")
+            # asyncio.create_task(self.write_tarfile(msg.path, tar))
+
+        # this has to be first so empty files created
+        await self.fh[msg.path].write(msg.data)
+
+        if msg.eof:
+            log.info(
+                f"Server transport: Stream file EOF received for {msg.path} ... closing handle"
+            )
+            await self.fh[msg.path].close()
+            del self.fh[msg.path]
+            return
 
     def handle_pty_message(self, msg):
         if not self.pty:
@@ -423,8 +466,73 @@ class EncryptedSocketServerTransport(ServerTransport):
             await self.begin_encryption(peer)
         log.info("Handle client finished... waiting on read loop")
 
-    async def read_socket_loop(self, peer):
-        extra_messages = []
+    async def overrun_strategy(self, peer: EncryptablePeer, to_consume: int):
+        log.info(f"LimitOverrun: Read {bytes_to_human(to_consume)} into buffer")
+
+        current = await peer.reader.read(to_consume)
+        # log.info(f"Cuurent is {bytes_to_human(len(current))}")
+        # if current.endswith((b"<", b"<?", b"<?!", b"<?!!", b"<?!!?")):
+        #     subjects = current[-4:]
+        #     print("subjects", subjects)
+        #     target = "<"
+        #     for i, subject in enumerate(subjects):
+        #         if subject == target:
+        #             bytes_needed = i + 1
+        #             print("bytes needed:", bytes_needed)
+        #             break
+        #         else:
+        #             i += 1
+
+        # messages = current.split(b"<?!!?>")
+        # msg_count = len(messages)
+        # log.info(f"Cuurent is {bytes_to_human(len(current))}. Message count is: {msg_count}")
+        # if msg_count > 1:
+        #     buffer = messages.pop()
+        #     await self.process_messages(peer, messages)
+        #     return buffer
+        # else:
+        return current
+        # match msg_count:
+        #     case 1:
+        #         # no separator found
+        #         if not buffer:
+        #             buffer.append(current)
+        #             continue
+
+        #         buffer.append(current)
+        #         buffer_bytes = b"".join(buffer)
+
+        #         potentials = buffer_bytes.split(self.separator)
+        #         if len(potentials) > 1:
+        #             buffer = [potentials.pop()]
+        #             log.info(f"The first message is {bytes_to_human(len(potentials[0]))}")
+        #             log.info(f"About to process {len(potentials)} message(s)")
+        #             await self.process_messages(peer, potentials)
+        #             if not buffer:
+        #                 break
+        #             log.info(f"Buffer is {bytes_to_human(len(buffer[0]))} bytes long")
+
+        #     case x if x > 1:
+        #         if messages[-1] == b"": # penultimate is message end
+        #             buffer.extend(messages[:-1])
+        #             # buffer could be multiple messages here,
+        #             # but they should all be full messages
+        #             buffer_bytes = b"".join(buffer)
+        #             full_messages = buffer_bytes.split(self.separator)
+        #             log.info(f"About to process {len(full_messages)} message(s) and break")
+        #             await self.process_messages(peer, full_messages[:-1])
+        #             break
+        #         else:
+        #             buffer.extend(messages)
+        #             buffer_bytes = b"".join(buffer)
+        #             full_messages = buffer_bytes.split(self.separator)
+        #             log.info(f"About to process {len(full_messages)} message(s)")
+        #             buffer = [full_messages.pop()]
+        #             log.info(f"Buffer is {len(buffer)} bytes long")
+        #             await self.process_messages(peer, full_messages)
+
+    async def read_socket_loop(self, peer: EncryptablePeer):
+        buffer = []
         while peer.reader and not peer.proxied and not peer.reader.at_eof():
             try:
                 data = await peer.reader.readuntil(separator=self.separator)
@@ -435,83 +543,72 @@ class EncryptedSocketServerTransport(ServerTransport):
                 log.warn(f"Connect was reset by peer: {peer.id}")
                 # do we need to tidy up here?
                 break
-            except asyncio.LimitOverrunError as e:
-                data = []
-                
-                while True:
-                    current = await peer.reader.read(64000)
-                    if current.endswith(self.separator):
-                        data.append(current)
-                        break
-
-                    data.append(current)
-                
-                count = re.findall(b"\<\?!!\?\\>", data[-1])
-
-                # split messages
-                if len(count) > 1:
-                    multi_message_bytes = data.pop()
-                    extra_messages = multi_message_bytes.split(b"<?!!?>")
-                    # or just remove the last item?
-                    extra_messages = list(filter(None, extra_messages))
-                    last_data = extra_messages.pop(0)
-                    data.append(last_data+b"<?!!?>")
-
-                data = b"".join(data)
-
             except BrokenPipeError:
                 # ToDo: fix this?
                 log.error(f"Broken pipe")
                 break
+            except asyncio.LimitOverrunError as e:
+                buffer.append(await self.overrun_strategy(peer, e.consumed))
+                continue
+
+            if buffer:
+                buffer.extend([data, self.separator])
+                data = b"".join(buffer)
+                buffer = []
 
             message = data.rstrip(self.separator)
-
-            all_messages = [message, *extra_messages]
-            extra_messages = []
-            
-            for message in all_messages:
-                try:
-                    message = SerializedMessage(message).deserialize()
-                except Exception as e:
-                    # ToDo: fix this
-                    log.error(repr(e))
-                    continue
-
-                log.debug(f"Received : {type(message).__name__}")
-
-                if peer.encrypted:
-                    message = message.decrypt(peer.key_data.aes_key)
-
-                if isinstance(message, (PtyMessage, PtyResizeMessage)):
-                    peer.handle_pty_message(message)
-                    continue
-
-                if isinstance(message, ChallengeReplyMessage):
-                    await self.handle_auth_message(peer, message)
-                    continue
-
-                # Encrypted message is the test message (peer isn't encrypted)
-                if isinstance(message, (SessionKeyMessage, EncryptedMessage)):
-                    await self.handle_encryption_message(peer, message)
-                    continue
-
-                if isinstance(message, ProxyMessage):
-                    await self.handle_forwarding_message(peer, message)
-                    continue
-
-                if isinstance(message, RpcRequestMessage):
-                    log.debug(
-                        f"Message received (decrypted and decoded): {bson.decode(message.payload)})"
-                    )
-                    await self.rpc_messages.put((peer.id, message.payload))
-
-                else:
-                    log.error(f"Unknown message: {message}")
+            await self.process_messages(peer, [message])
 
         log.debug(f"Read socket loop finished. peer.proxied: {peer.proxied}")
         if not peer.proxied:
             # reader at eof
             await self.peers.destroy_peer(peer.id)
+
+    async def process_messages(self, peer: EncryptablePeer, messages: list[bytes]):
+        for message in messages:
+            try:
+                message = SerializedMessage(message).deserialize()
+            except Exception as e:
+                # ToDo: fix this
+                log.error(repr(e))
+                print("start", message[0:100])
+                print("end", message[-100:])
+                continue
+
+            log.debug(f"Received : {type(message).__name__}")
+
+            if peer.encrypted:
+                message = message.decrypt(peer.key_data.aes_key)
+
+            if isinstance(message, (PtyMessage, PtyResizeMessage)):
+                peer.handle_pty_message(message)
+                continue
+
+            if isinstance(message, FileEntryStreamMessage):
+                await peer.handle_file_stream_message(message)
+                continue
+
+            if isinstance(message, ChallengeReplyMessage):
+                await self.handle_auth_message(peer, message)
+                continue
+
+            # Encrypted message is the test message (peer isn't encrypted)
+            if isinstance(message, (SessionKeyMessage, EncryptedMessage)):
+                await self.handle_encryption_message(peer, message)
+                continue
+
+            if isinstance(message, ProxyMessage):
+                await self.handle_forwarding_message(peer, message)
+                continue
+
+            if isinstance(message, RpcRequestMessage):
+                log.debug(
+                    f"Message received (decrypted and decoded): {bson.decode(message.payload)})"
+                )
+                await self.rpc_messages.put((peer.id, message.payload))
+
+            else:
+                log.error(f"Unknown message: {message}")
 
     async def stop_server(self):
         log.info("Stopping server")
@@ -529,6 +626,7 @@ class EncryptedSocketServerTransport(ServerTransport):
                     self._address,
                     self._port,
                     ssl=self.ssl,
+                    limit=1048576 * 105,
                     start_serving=True,
                 )
                 started = True

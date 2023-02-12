@@ -6,11 +6,13 @@ import pytest
 import six
 
 from fluxrpc import InvalidReplyError, MethodNotFoundError
-from fluxrpc.protocols.msgpackrpc import (MSGPACKRPCInternalError,
-                                             MSGPACKRPCInvalidParamsError,
-                                             MSGPACKRPCInvalidRequestError,
-                                             MSGPACKRPCMethodNotFoundError,
-                                             MSGPACKRPCParseError)
+from fluxrpc.protocols.msgpackrpc import (
+    MSGPACKRPCInternalError,
+    MSGPACKRPCInvalidParamsError,
+    MSGPACKRPCInvalidRequestError,
+    MSGPACKRPCMethodNotFoundError,
+    MSGPACKRPCParseError,
+)
 
 
 def _msgpack_equal(a, b):

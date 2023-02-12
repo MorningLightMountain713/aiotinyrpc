@@ -5,8 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from fluxrpc.transports.rabbitmq import (RabbitMQClientTransport,
-                                            RabbitMQServerTransport)
+from fluxrpc.transports.rabbitmq import RabbitMQClientTransport, RabbitMQServerTransport
 
 FAKE_REQUEST_MSG = b"a fake request message"
 FAKE_RESPONSE_MSG = b"a fake response message"

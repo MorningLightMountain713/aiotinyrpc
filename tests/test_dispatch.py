@@ -9,8 +9,7 @@ import pytest
 from fluxrpc import RPCBatchRequest, RPCBatchResponse, RPCRequest
 from fluxrpc.dispatch import RPCDispatcher, public
 from fluxrpc.exc import *
-from fluxrpc.protocols.jsonrpc import (JSONRPCInvalidParamsError,
-                                          JSONRPCProtocol)
+from fluxrpc.protocols.jsonrpc import JSONRPCInvalidParamsError, JSONRPCProtocol
 
 
 @pytest.fixture

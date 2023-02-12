@@ -1,52 +1,67 @@
 from __future__ import annotations
-from typing import Callable, Optional
 
 import asyncio
 import re
+import time
+from pathlib import Path
+from typing import Callable, Optional
+
+import aiofiles
+from rich.progress import (
+    BarColumn,
+    DownloadColumn,
+    Progress,
+    TaskID,
+    TextColumn,
+    TimeRemainingColumn,
+    TransferSpeedColumn,
+)
 
 from fluxrpc.transports import ClientTransport
-
 from fluxrpc.transports.socket.messages import (
-    RsaPublicKeyMessage,
-    SessionKeyMessage,
     AesKeyMessage,
-    SerializedMessage,
-    EncryptedMessage,
-    Message,
-    TestMessage,
     ChallengeReplyMessage,
+    EncryptedMessage,
+    FileEntryStreamMessage,
+    Message,
     ProxyMessage,
     ProxyResponseMessage,
-    RpcReplyMessage,
-    RpcRequestMessage,
+    PtyClosedMessage,
     PtyMessage,
     PtyResizeMessage,
-    PtyClosedMessage,
+    RpcReplyMessage,
+    RpcRequestMessage,
+    RsaPublicKeyMessage,
+    SerializedMessage,
+    SessionKeyMessage,
+    TestMessage,
 )
+
+
+def bytes_to_human(num, suffix="B"):
+    for unit in ["", "K", "M", "G", "T", "P", "E", "Z"]:
+        if abs(num) < 1024.0:
+            return f"{num:3.1f}{unit}{suffix}"
+        num /= 1024.0
+    return f"{num:.1f}Yi{suffix}"
 
 
 import ssl
 import tempfile
 
-
 from Cryptodome.Cipher import PKCS1_OAEP
 from Cryptodome.PublicKey import RSA
 from Cryptodome.Random import get_random_bytes
 
+from fluxrpc.auth import AuthProvider, AuthReplyMessage, ChallengeMessage
 from fluxrpc.log import log
 
-from fluxrpc.auth import (
-    AuthProvider,
-    ChallengeMessage,
-    AuthReplyMessage,
-)
-
 from .symbols import (
-    AUTH_DENIED,
-    PROXY_AUTH_DENIED,
     AUTH_ADDRESS_REQUIRED,
-    PROXY_AUTH_ADDRESS_REQUIRED,
+    AUTH_DENIED,
     NO_SOCKET,
+    PROXY_AUTH_ADDRESS_REQUIRED,
+    PROXY_AUTH_DENIED,
 )
 
 
@@ -102,6 +117,18 @@ class EncryptedSocketClientTransport(ClientTransport):
         self.challenge_complete_event = asyncio.Event()
         self.channels = 0
         self._proxy_source = ()
+        self.progress = Progress(
+            TextColumn("[bold blue]{task.fields[filename]}", justify="right"),
+            BarColumn(bar_width=None),
+            "[progress.percentage]{task.percentage:>3.1f}%",
+            "•",
+            DownloadColumn(),
+            "•",
+            TransferSpeedColumn(),
+            "•",
+            TimeRemainingColumn(),
+            # transient=True,
+        )
 
         # ToDo: maybe have a alway connected flag and if set, we connect here
         # self.connect()
@@ -122,6 +149,18 @@ class EncryptedSocketClientTransport(ClientTransport):
     @property
     def proxy_source(self) -> tuple:
         return self._proxy_source
+
+    @classmethod
+    def clone(cls, transport: EncryptedSocketClientTransport) -> EncryptedSocketClientTransport:
+        address = transport.address
+        port = transport._port
+        auth_provider = transport.auth_provider
+        proxy_target = transport.proxy_target
+        on_pty_data_callback = transport.on_pty_data_callback
+        on_pty_closed_callback = transport.on_pty_closed_callback
+
+        return cls(address, port, auth_provider, proxy_target, on_pty_data_callback, on_pty_closed_callback)
+
 
     @staticmethod
     def session_key_message(key_pem: str, aes_key: str) -> SessionKeyMessage:
@@ -303,12 +342,6 @@ class EncryptedSocketClientTransport(ClientTransport):
 
         await self.send(msg.serialize())
 
-    # async def wait_for_auth_reply(self):
-    #     auth_response = await self.messages.get()
-    #     if not isinstance(auth_response, AuthReplyMessage):
-    #         raise ValueError("Wrong message type received for authentication")
-    #     return auth_response.authenticated
-
     async def connect(self):
         log.info(f"Transport id: {id(self)} Connecting...")
         if self._connecting:
@@ -428,7 +461,6 @@ class EncryptedSocketClientTransport(ClientTransport):
                 self.encrypted = False
                 break
             except asyncio.LimitOverrunError as e:
-                print("LIMIT OVERRUN!!!!")
                 data = []
                 
                 while True:
@@ -454,6 +486,7 @@ class EncryptedSocketClientTransport(ClientTransport):
             except Exception as e:
                 print("in read socket loop")
                 print(repr(e))
+                break
 
             message = data.rstrip(self.separator)
 
@@ -517,6 +550,47 @@ class EncryptedSocketClientTransport(ClientTransport):
         self.writer.write(msg.serialize() + self.separator)
         await self.writer.drain()
 
+    async def stream_files(self, files: list[tuple[Path, str]]):
+        # create a channel if socket already connected
+        await self.connect()
+        for local_path, remote_path in files:
+            eof = False
+
+            log.info(f'Client transport: About to stream file {local_path.name}')
+
+            size = local_path.stat().st_size
+
+            with self.progress:
+                task_id = self.progress.add_task("download", filename=local_path.name, start=False)
+                self.progress.update(task_id, total=size)
+
+                async with aiofiles.open(local_path, "rb") as f:
+                    self.progress.start_task(task_id)
+                    start = time.time()
+                    while True:
+                        if eof:
+                            break
+
+                        # 50Mb
+                        data = await f.read(1048576 * 50)
+                        self.progress.update(task_id, advance=len(data))
+
+                        if not data:
+                            end = time.time()
+                            log.info(f"Client Transport: Transdfer complete. Elapsed: {end - start}")
+                            eof = True
+
+                        msg = FileEntryStreamMessage(data, remote_path, eof)
+
+                        if self.encrypted:
+                            msg = msg.encrypt(self.aeskey)
+
+                        self.writer.write(msg.serialize() + self.separator)
+                        await self.writer.drain()
+            self.progress.remove_task(task_id)
+        await self.disconnect()
+        #         # await asyncio.sleep(0.01)
+
     async def send_pty_resize_message(self, rows, cols):
         msg = PtyResizeMessage(rows, cols)
         if self.encrypted:
@@ -542,6 +616,7 @@ class EncryptedSocketClientTransport(ClientTransport):
         if isinstance(message, bytes):
             # should always be encrypted here?
             message = RpcRequestMessage(message)
+            # print("Payload size", bytes_to_human(len(message.payload)))
         if self.encrypted:
             log.debug(f"Sending encrypted message: {message}")
             message = message.encrypt(self.aeskey)

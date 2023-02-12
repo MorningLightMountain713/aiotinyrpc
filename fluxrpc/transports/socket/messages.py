@@ -1,9 +1,32 @@
 from __future__ import annotations  # 3.10 style
 
-import bson
-from dataclasses import dataclass
-from typing import Any
 import sys
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any
+
+import bson
+
+
+class MessageTypes(Enum):
+    ChallengeMessage = 1
+    ChallengeReplyMessage = 2
+    AuthReplyMessage = 3
+    ErrorMessage = 4
+    SerializedMessage = 5
+    RpcRequestMessage = 6
+    RpcReplyMessage = 7
+    PtyMessage = 8
+    PtyResizeMessage = 9
+    PtyClosedMessage = 10
+    SessionKeyMessage = 11
+    AesKeyMessage = 12
+    RsaPublicKeyMessage = 13
+    EncryptedMessage = 14
+    TestMessage = 15
+    ProxyMessage = 16
+    ProxyResponseMessage = 17
+    FileEntryStreamMessage = 18
 
 from Cryptodome.Cipher import AES
 
@@ -12,7 +35,14 @@ from Cryptodome.Cipher import AES
 class Message:
     def serialize(self) -> bytes:
         # ToDo: convert types to ints, lower overhead
-        self._type = self.__class__.__name__
+        try:
+            # figure it's cheaper to transmit ints that strings. Probably
+            # should use structs
+            self._type = MessageTypes[self.__class__.__name__].value
+        except Exception as e:
+            print('trying to serialize')
+            print(repr(e))
+
         # ToDo: recurse
         return bson.encode(self.__dict__)
 
@@ -22,7 +52,8 @@ class Message:
         except bson.errors.InvalidBSON:
             # print(self.msg)
             raise
-        klass = getattr(sys.modules[__name__], decoded["_type"])
+
+        klass = getattr(sys.modules[__name__], MessageTypes(decoded["_type"]).name)
         del decoded["_type"]
         return klass(**decoded)
 
@@ -144,16 +175,8 @@ class ProxyResponseMessage(Message):
     success: bool
     socket_details: tuple = ()
 
-
 @dataclass
-class FingerprintMessage(Message):
-    ...
-
-
-@dataclass
-class FingerprintResponseMessage(Message):
-    verify_source_address: bool
-    whitelisted_addresses: list
-    authentication_required: bool
-    authentication_address: str
-    ssl: bool
+class FileEntryStreamMessage(Message):
+    data: bytes
+    path: str = ""
+    eof: bool = False

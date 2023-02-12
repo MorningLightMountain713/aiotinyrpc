@@ -7,11 +7,7 @@ from collections import namedtuple
 from typing import Any, Callable, Dict, List
 
 from .exc import RPCError
-from .protocols import (
-    RPCBatchResponse,
-    RPCProtocol,
-    RPCRequest,
-)
+from .protocols import RPCBatchResponse, RPCProtocol, RPCRequest
 from .transports import ClientTransport
 
 RPCCall = namedtuple("RPCCall", "method args kwargs")
@@ -200,6 +196,9 @@ class RPCProxy(object):
     def notify(self):
         """Sets the next rpc call as a notification"""
         self.one_way = True
+
+    def get_transport(self):
+        return self.client.transport
 
     def __getattr__(self, name: str) -> Callable:
         """Returns a proxy function that, when called, will call a function

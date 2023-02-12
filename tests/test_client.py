@@ -7,8 +7,7 @@ import pytest
 
 from fluxrpc.client import RPCClient, RPCProxy
 from fluxrpc.exc import RPCError
-from fluxrpc.protocols import (RPCErrorResponse, RPCProtocol, RPCRequest,
-                                  RPCResponse)
+from fluxrpc.protocols import RPCErrorResponse, RPCProtocol, RPCRequest, RPCResponse
 from fluxrpc.transports import ClientTransport
 
 

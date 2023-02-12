@@ -10,9 +10,9 @@ to the caller.
 """
 
 import asyncio
+import functools
 import inspect
 from typing import Any, Callable, Dict, List, Optional, TypeVar, Union, overload
-import functools
 
 from fluxrpc import RPCBatchRequest, RPCBatchResponse, RPCRequest, RPCResponse, exc
 

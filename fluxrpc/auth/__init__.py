@@ -1,15 +1,15 @@
 from __future__ import annotations
 
+from bitcoin.base58 import Base58Error
+from bitcoin.signmessage import BitcoinMessage, SignMessage, VerifyMessage
+from bitcoin.wallet import CBitcoinSecret, P2PKHBitcoinAddress
+from Cryptodome.Random import get_random_bytes
+
 from fluxrpc.transports.socket.messages import (
+    AuthReplyMessage,
     ChallengeMessage,
     ChallengeReplyMessage,
-    AuthReplyMessage,
 )
-
-from bitcoin.wallet import CBitcoinSecret, P2PKHBitcoinAddress
-from bitcoin.signmessage import BitcoinMessage, VerifyMessage, SignMessage
-from bitcoin.base58 import Base58Error
-from Cryptodome.Random import get_random_bytes
 
 
 class AuthProvider:

@@ -6,9 +6,16 @@ from typing import Any, Dict, Generator, List, Optional, Tuple, Union
 import msgpack
 import six
 
-from .. import (InvalidReplyError, InvalidRequestError, MethodNotFoundError,
-                RPCError, RPCErrorResponse, RPCProtocol, RPCRequest,
-                RPCResponse)
+from .. import (
+    InvalidReplyError,
+    InvalidRequestError,
+    MethodNotFoundError,
+    RPCError,
+    RPCErrorResponse,
+    RPCProtocol,
+    RPCRequest,
+    RPCResponse,
+)
 from . import default_id_generator
 
 

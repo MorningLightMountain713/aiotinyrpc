@@ -6,15 +6,22 @@ import json
 import pytest
 import six
 
-from fluxrpc import (InvalidReplyError, InvalidRequestError,
-                        MethodNotFoundError, RPCError, RPCResponse,
-                        ServerError)
-from fluxrpc.protocols.jsonrpc import (JSONRPCErrorResponse,
-                                          JSONRPCInternalError,
-                                          JSONRPCInvalidParamsError,
-                                          JSONRPCInvalidRequestError,
-                                          JSONRPCMethodNotFoundError,
-                                          JSONRPCParseError)
+from fluxrpc import (
+    InvalidReplyError,
+    InvalidRequestError,
+    MethodNotFoundError,
+    RPCError,
+    RPCResponse,
+    ServerError,
+)
+from fluxrpc.protocols.jsonrpc import (
+    JSONRPCErrorResponse,
+    JSONRPCInternalError,
+    JSONRPCInvalidParamsError,
+    JSONRPCInvalidRequestError,
+    JSONRPCMethodNotFoundError,
+    JSONRPCParseError,
+)
 
 
 def _json_equal(a, b):
