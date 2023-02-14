@@ -11,7 +11,6 @@ from rich.progress import (
     BarColumn,
     DownloadColumn,
     Progress,
-    TaskID,
     TextColumn,
     TimeRemainingColumn,
     TransferSpeedColumn,
@@ -151,7 +150,9 @@ class EncryptedSocketClientTransport(ClientTransport):
         return self._proxy_source
 
     @classmethod
-    def clone(cls, transport: EncryptedSocketClientTransport) -> EncryptedSocketClientTransport:
+    def clone(
+        cls, transport: EncryptedSocketClientTransport
+    ) -> EncryptedSocketClientTransport:
         address = transport.address
         port = transport._port
         auth_provider = transport.auth_provider
@@ -159,8 +160,14 @@ class EncryptedSocketClientTransport(ClientTransport):
         on_pty_data_callback = transport.on_pty_data_callback
         on_pty_closed_callback = transport.on_pty_closed_callback
 
-        return cls(address, port, auth_provider, proxy_target, on_pty_data_callback, on_pty_closed_callback)
-
+        return cls(
+            address,
+            port,
+            auth_provider,
+            proxy_target,
+            on_pty_data_callback,
+            on_pty_closed_callback,
+        )
 
     @staticmethod
     def session_key_message(key_pem: str, aes_key: str) -> SessionKeyMessage:
@@ -462,7 +469,7 @@ class EncryptedSocketClientTransport(ClientTransport):
                 break
             except asyncio.LimitOverrunError as e:
                 data = []
-                
+
                 while True:
                     current = await self.reader.read(64000)
                     if current.endswith(self.separator):
@@ -470,7 +477,7 @@ class EncryptedSocketClientTransport(ClientTransport):
                         break
 
                     data.append(current)
-                
+
                 count = re.findall(b"\<\?!!\?\\>", data[-1])
 
                 # split messages
@@ -480,7 +487,7 @@ class EncryptedSocketClientTransport(ClientTransport):
                     # or just remove the last item?
                     extra_messages = list(filter(None, extra_messages))
                     last_data = extra_messages.pop(0)
-                    data.append(last_data+b"<?!!?>")
+                    data.append(last_data + b"<?!!?>")
 
                 data = b"".join(data)
             except Exception as e:
@@ -492,7 +499,7 @@ class EncryptedSocketClientTransport(ClientTransport):
 
             all_messages = [message, *extra_messages]
             extra_messages = []
-            
+
             for message in all_messages:
                 # ToDo: catch
                 try:
@@ -556,12 +563,14 @@ class EncryptedSocketClientTransport(ClientTransport):
         for local_path, remote_path in files:
             eof = False
 
-            log.info(f'Client transport: About to stream file {local_path.name}')
+            log.info(f"Client transport: About to stream file {local_path.name}")
 
             size = local_path.stat().st_size
 
             with self.progress:
-                task_id = self.progress.add_task("download", filename=local_path.name, start=False)
+                task_id = self.progress.add_task(
+                    "download", filename=local_path.name, start=False
+                )
                 self.progress.update(task_id, total=size)
 
                 async with aiofiles.open(local_path, "rb") as f:
@@ -577,7 +586,9 @@ class EncryptedSocketClientTransport(ClientTransport):
 
                         if not data:
                             end = time.time()
-                            log.info(f"Client Transport: Transdfer complete. Elapsed: {end - start}")
+                            log.info(
+                                f"Client Transport: Transdfer complete. Elapsed: {end - start}"
+                            )
                             eof = True
 
                         msg = FileEntryStreamMessage(data, remote_path, eof)

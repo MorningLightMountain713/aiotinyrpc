@@ -454,7 +454,7 @@ class EncryptedSocketServerTransport(ServerTransport):
         peer.challenge_complete_event.clear()
 
         if not peer.authenticated and self.auth_provider:
-            log.error("Peer not authenticated... destroying socket")
+            log.warn("Peer not authenticated... destroying socket")
             await self.peers.destroy_peer(peer.id)
             return
 
