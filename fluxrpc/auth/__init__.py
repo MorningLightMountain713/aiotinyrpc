@@ -30,6 +30,19 @@ class SignatureAuthProvider(AuthProvider):
 
         self.to_sign = None
 
+    def sign_message(self, to_sign):
+        try:
+            secret = CBitcoinSecret(self.key)
+        except Base58Error:
+            raise ValueError
+
+        message = BitcoinMessage(to_sign)
+        return SignMessage(secret, message)
+
+    def verify_message(self, address: str, msg: str, sig: str):
+        msg = BitcoinMessage(msg)
+        return VerifyMessage(address, msg, sig)
+
     def auth_message(self, id, to_sign):
         """Creates a message (non serialized) to be sent to the authenticator.
         In this case the message is a Bitcoin signed message"""

@@ -441,7 +441,7 @@ class EncryptedSocketServerTransport(ServerTransport):
         peer = EncryptablePeer(client_id, reader, writer)
         self.peers.add_peer(peer)
 
-        if self.verify_source_address and not await self.valid_source_ip(id[0]):
+        if self.verify_source_address and not await self.valid_source_ip(client_id[0]):
             log.warn("Source IP address not verified... dropping")
             await self.peers.destroy_peer(peer.id)
             return
