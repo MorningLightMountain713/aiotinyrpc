@@ -530,13 +530,13 @@ class EncryptedSocketClientTransport(ClientTransport):
                     case RpcReplyMessage():
                         await self.messages.put(message)
 
-                    case ChallengeMessage(), AuthReplyMessage():
+                    case ChallengeMessage() | AuthReplyMessage():
                         await self.authentication_message_handler(message)
 
                     case ProxyResponseMessage():
                         asyncio.create_task(self.forwarding_message_handler(message))
 
-                    case RsaPublicKeyMessage(), TestMessage():
+                    case RsaPublicKeyMessage() | TestMessage():
                         await self.encryption_message_handler(message)
 
                     # This is our test message as we're not encrypted yet
