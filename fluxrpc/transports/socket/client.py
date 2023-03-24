@@ -381,7 +381,7 @@ class EncryptedSocketClientTransport(ClientTransport):
 
         if self.auth_required and not self.auth_provider:
             self.auth_error = "Auth required and no auth provider set"
-            log.error(self.auth_error)
+            log.warning(self.auth_error)
             await self.disconnect()
             self._connecting = False
             return
@@ -454,11 +454,18 @@ class EncryptedSocketClientTransport(ClientTransport):
 
     async def read_socket_loop(self):
         extra_messages = []
+        timeout = 15
         while self.reader and not self.reader.at_eof():
             try:
-                data = await self.reader.readuntil(self.separator)
+                coro = self.reader.readuntil(self.separator)
+                data = await asyncio.wait_for(coro, timeout=timeout)
+            except TimeoutError as e:
+                log.error(f"Timeout of {timeout}s exceeded for socket read, returning")
+                self._connected = False
+                self.encrypted = False
+                break
             except asyncio.IncompleteReadError as e:
-                log.debug("EOF reached, socket closed")
+                # log.debug("EOF reached, socket closed")
                 self._connected = False
                 self.encrypted = False
                 break
@@ -493,6 +500,8 @@ class EncryptedSocketClientTransport(ClientTransport):
             except Exception as e:
                 print("in read socket loop")
                 print(repr(e))
+                self._connected = False
+                self.encrypted = False
                 break
 
             message = data.rstrip(self.separator)
@@ -507,45 +516,40 @@ class EncryptedSocketClientTransport(ClientTransport):
                 except Exception as e:
                     print("can't deserialize in for")
                     print(repr(e))
+                    continue
                 log.debug(f"Received : {type(message).__name__}")
 
                 if self.encrypted:
                     message = message.decrypt(self.aeskey)
 
-                if isinstance(message, PtyMessage):
-                    our_socket = self.writer.get_extra_info("sockname")
-                    await self.on_pty_data_callback(our_socket, message.data)
-                    continue
+                match message:
+                    case PtyMessage():
+                        our_socket = self.writer.get_extra_info("sockname")
+                        await self.on_pty_data_callback(our_socket, message.data)
 
-                if isinstance(message, RpcReplyMessage):
-                    await self.messages.put(message)
-                    continue
+                    case RpcReplyMessage():
+                        await self.messages.put(message)
 
-                if isinstance(message, (ChallengeMessage, AuthReplyMessage)):
-                    await self.authentication_message_handler(message)
-                    continue
+                    case ChallengeMessage(), AuthReplyMessage():
+                        await self.authentication_message_handler(message)
 
-                if isinstance(message, ProxyResponseMessage):
-                    asyncio.create_task(self.forwarding_message_handler(message))
-                    continue
+                    case ProxyResponseMessage():
+                        asyncio.create_task(self.forwarding_message_handler(message))
 
-                if isinstance(message, (RsaPublicKeyMessage, TestMessage)):
-                    await self.encryption_message_handler(message)
-                    continue
+                    case RsaPublicKeyMessage(), TestMessage():
+                        await self.encryption_message_handler(message)
 
-                # This is our test message as we're not encrypted yet
-                # it could be part of the handler above but more clear here
-                if isinstance(message, EncryptedMessage):
-                    await self.encryption_message_handler(message)
-                    continue
+                    # This is our test message as we're not encrypted yet
+                    # it could be part of the handler above but more clear here
+                    case EncryptedMessage():
+                        await self.encryption_message_handler(message)
 
-                if isinstance(message, PtyClosedMessage):
-                    our_socket = self.writer.get_extra_info("sockname")
-                    await self.on_pty_closed_callback(our_socket)
-                    continue
+                    case PtyClosedMessage():
+                        our_socket = self.writer.get_extra_info("sockname")
+                        await self.on_pty_closed_callback(our_socket)
 
-                else:
-                    log.error(f"Unknown message: {message}")
+                    case _:
+                        log.error(f"Unknown message: {message}")
 
         log.debug("Finished read socket loop")
 
@@ -662,6 +666,7 @@ class EncryptedSocketClientTransport(ClientTransport):
             f"Disconnect called for socket: {sockname}. Total channels before: {self.channels}"
         )
         self.channels -= 1
+        # this is dodgey, -1 is True
         if self.channels:
             return
 
