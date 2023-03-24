@@ -372,12 +372,19 @@ class EncryptedSocketClientTransport(ClientTransport):
             log.error("No reader or writer... Error connecting")
             return
 
+        self.channels += 1
+
         asyncio.create_task(self.read_socket_loop())
 
-        await self.challenge_complete_event.wait()
-        self.challenge_complete_event.clear()
+        try:
+            await asyncio.wait_for(self.challenge_complete_event.wait(), timeout=10)
+        except TimeoutError:
+            await self.disconnect()
+            self._connecting = False
+            log.error("Timed out waiting for challenge event, probably broken socket")
+            return
 
-        self.channels += 1
+        self.challenge_complete_event.clear()
 
         if self.auth_required and not self.auth_provider:
             self.auth_error = "Auth required and no auth provider set"
@@ -387,7 +394,16 @@ class EncryptedSocketClientTransport(ClientTransport):
             return
 
         if self.auth_required:
-            await self.authentication_event.wait()
+            try:
+                await asyncio.wait_for(self.authentication_event.wait(), timeout=10)
+            except TimeoutError:
+                await self.disconnect()
+                self._connecting = False
+                log.error(
+                    "Timed out waiting for authentication event, probably broken socket"
+                )
+                return
+
             self.authentication_event.clear()
 
             if not self.authenticated:
@@ -400,10 +416,24 @@ class EncryptedSocketClientTransport(ClientTransport):
 
         await self.send_forwarding_message()
 
-        await self.forwarding_event.wait()
+        try:
+            await asyncio.wait_for(self.forwarding_event.wait(), timeout=10)
+        except TimeoutError:
+            await self.disconnect()
+            self._connecting = False
+            log.error("Timed out waiting for forwarding event, probably broken socket")
+            return
+
         self.forwarding_event.clear()
 
-        await self.encrypted_event.wait()
+        try:
+            await asyncio.wait_for(self.encrypted_event.wait(), timeout=10)
+        except TimeoutError:
+            await self.disconnect()
+            self._connecting = False
+            log.error("Timed out waiting for encrypted event, probably broken socket")
+            return
+
         self.encrypted_event.clear()
 
         # self.channels += 1
