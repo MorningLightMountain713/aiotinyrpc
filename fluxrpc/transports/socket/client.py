@@ -454,7 +454,7 @@ class EncryptedSocketClientTransport(ClientTransport):
 
     async def read_socket_loop(self):
         extra_messages = []
-        timeout = 15
+        timeout = 40
         while self.reader and not self.reader.at_eof():
             try:
                 coro = self.reader.readuntil(self.separator)
