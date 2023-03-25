@@ -350,6 +350,8 @@ class EncryptedSocketClientTransport(ClientTransport):
         await self.send(msg.serialize())
 
     async def connect(self):
+        log.info(f"DEBUG: all tasks count: {len(asyncio.all_tasks())}")
+
         log.info(f"Transport id: {id(self)} Connecting...")
         if self._connecting:
             log.info("Connecting... adding channel")
@@ -378,7 +380,7 @@ class EncryptedSocketClientTransport(ClientTransport):
 
         try:
             await asyncio.wait_for(self.challenge_complete_event.wait(), timeout=10)
-        except TimeoutError:
+        except asyncio.TimeoutError:
             await self.disconnect()
             self._connecting = False
             log.error("Timed out waiting for challenge event, probably broken socket")
@@ -396,7 +398,7 @@ class EncryptedSocketClientTransport(ClientTransport):
         if self.auth_required:
             try:
                 await asyncio.wait_for(self.authentication_event.wait(), timeout=10)
-            except TimeoutError:
+            except asyncio.TimeoutError:
                 await self.disconnect()
                 self._connecting = False
                 log.error(
@@ -418,7 +420,7 @@ class EncryptedSocketClientTransport(ClientTransport):
 
         try:
             await asyncio.wait_for(self.forwarding_event.wait(), timeout=10)
-        except TimeoutError:
+        except asyncio.TimeoutError:
             await self.disconnect()
             self._connecting = False
             log.error("Timed out waiting for forwarding event, probably broken socket")
@@ -428,7 +430,7 @@ class EncryptedSocketClientTransport(ClientTransport):
 
         try:
             await asyncio.wait_for(self.encrypted_event.wait(), timeout=10)
-        except TimeoutError:
+        except asyncio.TimeoutError:
             await self.disconnect()
             self._connecting = False
             log.error("Timed out waiting for encrypted event, probably broken socket")
@@ -489,7 +491,7 @@ class EncryptedSocketClientTransport(ClientTransport):
             try:
                 coro = self.reader.readuntil(self.separator)
                 data = await asyncio.wait_for(coro, timeout=timeout)
-            except TimeoutError as e:
+            except asyncio.TimeoutError as e:
                 log.error(f"Timeout of {timeout}s exceeded for socket read, returning")
                 self._connected = False
                 self.encrypted = False
