@@ -117,7 +117,7 @@ class EncryptablePeer:
     id: tuple
     reader: asyncio.StreamReader
     writer: asyncio.StreamWriter
-    key_data: KeyData = KeyData()
+    key_data: KeyData = field(default_factory=KeyData)
     encrypted: bool = False
     authenticated: bool = False
     separator = b"<?!!?>"
