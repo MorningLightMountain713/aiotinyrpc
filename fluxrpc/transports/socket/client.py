@@ -456,6 +456,8 @@ class EncryptedSocketClientTransport(ClientTransport):
                 log.warn(f"Timeout error connecting to {self._address}")
             except ConnectionError:
                 log.warn(f"Connection error connecting to {self._address}")
+            except OSError:
+                log.warn(f"Network error connection to {self._address}")
             else:
                 break
             await asyncio.sleep(n)
@@ -529,6 +531,7 @@ class EncryptedSocketClientTransport(ClientTransport):
                     data.append(last_data + b"<?!!?>")
 
                 data = b"".join(data)
+
             except Exception as e:
                 print("in read socket loop")
                 print(repr(e))

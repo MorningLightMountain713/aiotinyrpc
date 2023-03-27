@@ -547,9 +547,16 @@ class EncryptedSocketServerTransport(ServerTransport):
                 # ToDo: fix this?
                 log.error(f"Broken pipe")
                 break
+            except ConnectionError:
+                log.warn(f"Connection Error to peer: {peer.id}")
+                # do we need to tidy up here?
+                break
             except asyncio.LimitOverrunError as e:
                 buffer.append(await self.overrun_strategy(peer, e.consumed))
                 continue
+            except Exception as e:
+                log.error(f"Unknown read socket error: {repr(e)}")
+                break
 
             if buffer:
                 buffer.extend([data, self.separator])

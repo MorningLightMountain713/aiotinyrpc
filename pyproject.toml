@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "fluxrpc"
-version = "0.9.15"
+version = "0.9.16"
 description = "\"A sercure RPC provider for Flux\""
 authors = ["David White <dr.white.nz@gmail.com>"]
 license = "MIT"
