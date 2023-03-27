@@ -646,6 +646,11 @@ class EncryptedSocketServerTransport(ServerTransport):
         msg = RpcReplyMessage(data)
         peer = self.peers.get_peer(context)
 
+        if not peer:
+            # socket has been terminated / removed
+            log.warning(f"Peer {context} has been destroyed... dropping reply")
+            return
+
         log.debug(
             f"Decoded RPC response (before encryption): {bson.decode(msg.payload)}"
         )
