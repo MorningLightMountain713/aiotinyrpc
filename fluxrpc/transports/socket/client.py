@@ -676,7 +676,11 @@ class EncryptedSocketClientTransport(ClientTransport):
         await self.send(message.serialize())
 
         if expect_reply:
-            res = await self.messages.get()
+            try:
+                res = await asyncio.wait_for(self.messages.get(), timeout=30)
+            except asyncio.TimeoutError:
+                log.error("Timed out (30s) waiting for reply")
+                return
 
             if isinstance(res, RpcReplyMessage):
                 res = res.payload
