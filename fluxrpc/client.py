@@ -54,7 +54,6 @@ class RPCClient(object):
     def connected(self):
         return self.transport.connected
 
-
     async def _send_and_handle_reply(self, req: RPCRequest, one_way: bool = False):
         if self.transport.is_async:
             reply = await self.transport.send_message(req.serialize(), not one_way)
@@ -93,6 +92,7 @@ class RPCClient(object):
         """
         req = self.protocol.create_request(method, args, kwargs, one_way)
 
+        # this can raise TimeoutError but we let upper layer handle
         rep = await self._send_and_handle_reply(req, one_way)
 
         if one_way:
@@ -137,9 +137,7 @@ class RPCClient(object):
                 threads.append(self._send_and_handle_reply(req, False, tr, True))
             return threads
 
-    def get_proxy(
-        self, prefix: str = "", plugins: list = []
-    ) -> "RPCProxy":
+    def get_proxy(self, prefix: str = "", plugins: list = []) -> "RPCProxy":
         """Convenience method for creating a proxy.
 
         :param prefix: Passed on to :py:class:`~tinyrpc.client.RPCProxy`.
