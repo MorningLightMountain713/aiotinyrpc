@@ -115,6 +115,7 @@ class EncryptedSocketClientTransport(ClientTransport):
         self.authentication_event = asyncio.Event()
         self.challenge_complete_event = asyncio.Event()
         self.channels = 0
+        self.read_socket_task: asyncio.Task | None = None
         self._proxy_source = ()
         self.progress = Progress(
             TextColumn("[bold blue]{task.fields[filename]}", justify="right"),
@@ -376,7 +377,7 @@ class EncryptedSocketClientTransport(ClientTransport):
 
         self.channels += 1
 
-        asyncio.create_task(self.read_socket_loop())
+        self.read_socket_task = asyncio.create_task(self.read_socket_loop())
 
         try:
             await asyncio.wait_for(self.challenge_complete_event.wait(), timeout=10)
@@ -692,6 +693,9 @@ class EncryptedSocketClientTransport(ClientTransport):
         self.proxy_authenticated = False
         self.auth_required = True
         self.proxy_auth_required = True
+
+        if self.read_socket_task:
+            self.read_socket_task.cancel()
         # self.failed_on = ""
 
     async def disconnect(self):
