@@ -5,6 +5,7 @@ import binascii
 import fcntl
 import io
 import os
+import time
 import re
 import select
 import signal
@@ -78,8 +79,9 @@ class EncryptablePeerGroup:
 
     async def destroy_peer(self, id):
         log.info(f"Destroying peer: {id}")
-        peer = self.get_peer(id)
+        peer: EncryptablePeer = self.get_peer(id)
         if peer:
+            peer.read_socket_task.cancel()
             peer.writer.close()
             await peer.writer.wait_closed()
             self.peers = [x for x in self.peers if x.id != id]
@@ -127,6 +129,7 @@ class EncryptablePeer:
     random: str = ""
     proxied: bool = False
     timer: asyncio.Task | None = None
+    read_socket_task: asyncio.Task | None = None
     challenge_complete_event: asyncio.Event = field(default_factory=asyncio.Event)
     forwarding_event: asyncio.Event = field(default_factory=asyncio.Event)
     fh: dict[str, BinaryIO] = field(default_factory=dict)
@@ -311,7 +314,7 @@ class EncryptedSocketServerTransport(ServerTransport):
         log.info(f"Auth provider authenticated: {peer.authenticated}")
         peer.challenge_complete_event.set()
 
-    async def handle_forwarding_message(self, peer, msg):
+    async def handle_forwarding_message(self, peer: EncryptablePeer, msg: ProxyMessage):
         resp = ProxyResponseMessage(False)
         if msg.proxy_required:
             success, proxy_id = await self.setup_forwarding(
@@ -322,11 +325,13 @@ class EncryptedSocketServerTransport(ServerTransport):
             log.debug("Response message")
             log.debug(resp)
             await peer.send(resp.serialize())
-            peer.forwarding_event.set()
 
             if not success:
                 log.error("Not proxied... closing socket")
                 await self.peers.destroy_peer(peer.id)
+
+            peer.forwarding_event.set()
+
             return
 
         await peer.send(resp.serialize())
@@ -359,13 +364,16 @@ class EncryptedSocketServerTransport(ServerTransport):
 
     async def setup_forwarding(self, host, port, peer) -> tuple:
         """Connects to socket server. Tries a max of 3 times"""
-        retries = 3
+        attempts = 3
 
         proxy_reader = proxy_writer = None
-        for n in range(retries):
+        for n in range(attempts):
+            start = time.monotonic()
+
             con = asyncio.open_connection(host, port)
+
             try:
-                proxy_reader, proxy_writer = await asyncio.wait_for(con, timeout=3)
+                proxy_reader, proxy_writer = await asyncio.wait_for(con, timeout=1)
 
                 break
 
@@ -373,7 +381,12 @@ class EncryptedSocketServerTransport(ServerTransport):
                 log.warn(f"Timeout error connecting to {host}")
             except ConnectionError:
                 log.warn(f"Connection error connecting to {host}")
-            await asyncio.sleep(n)
+            except Exception as e:
+                log.warn(f"Unknown exception {e} trying to proxy connction")
+
+            elapsed = time.monotonic() - start
+
+            await asyncio.sleep(max(0, 1 - elapsed))
 
         if proxy_writer:
             peer.proxied = True
@@ -446,7 +459,7 @@ class EncryptedSocketServerTransport(ServerTransport):
             await self.peers.destroy_peer(peer.id)
             return
 
-        asyncio.create_task(self.read_socket_loop(peer))
+        peer.read_socket_task = asyncio.create_task(self.read_socket_loop(peer))
 
         await self.send_challenge_message(peer)
 
@@ -458,11 +471,10 @@ class EncryptedSocketServerTransport(ServerTransport):
             await self.peers.destroy_peer(peer.id)
             return
 
-        # ToDo: do this better. start from this end
         await peer.forwarding_event.wait()
         peer.forwarding_event.clear()
 
-        if not peer.proxied:
+        if peer.writer and not peer.writer.is_closing() and not peer.proxied:
             await self.begin_encryption(peer)
         log.info("Handle client finished... waiting on read loop")
 

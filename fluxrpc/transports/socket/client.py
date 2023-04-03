@@ -61,6 +61,7 @@ from .symbols import (
     NO_SOCKET,
     PROXY_AUTH_ADDRESS_REQUIRED,
     PROXY_AUTH_DENIED,
+    PROXY_NO_SOCKET,
 )
 
 
@@ -269,14 +270,17 @@ class EncryptedSocketClientTransport(ClientTransport):
 
             self.authentication_event.set()
 
-    async def forwarding_message_handler(self, msg):
-        # ProxyResponseMessage
+    async def forwarding_message_handler(self, msg: ProxyResponseMessage):
+        if not msg.success and self.proxy_target:
+            self.failed_on = PROXY_NO_SOCKET
+
         if msg.success and self.proxy_target:
             # from this point we are being proxied
             self._proxy_source = msg.socket_details
             if self.proxy_ssl:
                 await self.upgrade_socket()
 
+            # these all need timeouts
             await self.challenge_complete_event.wait()
             self.challenge_complete_event.clear()
 
@@ -428,6 +432,13 @@ class EncryptedSocketClientTransport(ClientTransport):
             return
 
         self.forwarding_event.clear()
+
+        # this happens if proxy connection fails
+        if self.failed_on:
+            await self.disconnect()
+            self._connecting = False
+            log.error(f"Failed to connect. Failed on: {self.failed_on}")
+            return
 
         try:
             await asyncio.wait_for(self.encrypted_event.wait(), timeout=10)
@@ -712,8 +723,6 @@ class EncryptedSocketClientTransport(ClientTransport):
 
         self._disconnecting = True
 
-        self.reset_state()
-
         log.info("No more channels... closing socket")
         await self._close_socket()
 
@@ -725,6 +734,9 @@ class EncryptedSocketClientTransport(ClientTransport):
                 self.writer.write_eof()
             except NotImplementedError:
                 log.warn("Can't write EOF on SSL socket")
+            except OSError:
+                # socket is not connected
+                pass
 
             self.writer.close()
             await self.writer.wait_closed()
