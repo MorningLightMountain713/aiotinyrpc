@@ -27,6 +27,8 @@ class MessageTypes(Enum):
     ProxyMessage = 16
     ProxyResponseMessage = 17
     FileEntryStreamMessage = 18
+    LivelinessMessage = 19
+
 
 from Cryptodome.Cipher import AES
 
@@ -40,7 +42,7 @@ class Message:
             # should use structs
             self._type = MessageTypes[self.__class__.__name__].value
         except Exception as e:
-            print('trying to serialize')
+            print("trying to serialize")
             print(repr(e))
 
         # ToDo: recurse
@@ -175,8 +177,14 @@ class ProxyResponseMessage(Message):
     success: bool
     socket_details: tuple = ()
 
+
 @dataclass
 class FileEntryStreamMessage(Message):
     data: bytes
     path: str = ""
     eof: bool = False
+
+
+@dataclass
+class LivelinessMessage(Message):
+    text: str = "Echo"

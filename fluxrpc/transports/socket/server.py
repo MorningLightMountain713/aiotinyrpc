@@ -43,6 +43,7 @@ from fluxrpc.transports.socket.messages import (
     SerializedMessage,
     SessionKeyMessage,
     TestMessage,
+    LivelinessMessage,
 )
 
 
@@ -313,6 +314,12 @@ class EncryptedSocketServerTransport(ServerTransport):
 
         log.info(f"Auth provider authenticated: {peer.authenticated}")
         peer.challenge_complete_event.set()
+
+    async def handle_liveliness_message(
+        self, peer: EncryptablePeer, msg: LivelinessMessage
+    ):
+        reply = LivelinessMessage(msg.text[::-1])
+        await peer.send(reply.serialize())
 
     async def handle_forwarding_message(self, peer: EncryptablePeer, msg: ProxyMessage):
         resp = ProxyResponseMessage(False)
@@ -605,6 +612,10 @@ class EncryptedSocketServerTransport(ServerTransport):
 
             if isinstance(message, FileEntryStreamMessage):
                 await peer.handle_file_stream_message(message)
+                continue
+
+            if isinstance(message, LivelinessMessage):
+                await self.handle_liveliness_message(peer, message)
                 continue
 
             if isinstance(message, ChallengeReplyMessage):

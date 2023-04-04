@@ -34,6 +34,7 @@ from fluxrpc.transports.socket.messages import (
     SerializedMessage,
     SessionKeyMessage,
     TestMessage,
+    LivelinessMessage,
 )
 
 
@@ -214,6 +215,23 @@ class EncryptedSocketClientTransport(ClientTransport):
         reader._transport = new_transport
         writer._transport = new_transport
 
+    async def writeable(self) -> bool:
+        """Writes on the socket and checks it's all good"""
+        if not self.writer:
+            return False
+
+        try:
+            res = await asyncio.wait_for(
+                self.send_message(LivelinessMessage()), timeout=3
+            )
+        except (ConnectionResetError, BrokenPipeError, asyncio.TimeoutError):
+            return False
+
+        if not isinstance(res, LivelinessMessage):
+            return False
+
+        return True if res.text == "ohcE" else False
+
     ## handlers
 
     async def authentication_message_handler(self, msg):
@@ -354,8 +372,19 @@ class EncryptedSocketClientTransport(ClientTransport):
 
         await self.send(msg.serialize())
 
+    async def ensure_connected(self):
+        while not await self.writeable():
+            await self.connect()
+            if not self.failed_on:
+                break
+            log.info(f"Sleeping 20s")
+            await asyncio.sleep(20)
+        log.info("Socket is writeable")
+
     async def connect(self):
         log.info(f"DEBUG: all tasks count: {len(asyncio.all_tasks())}")
+        # start fresh
+        self.failed_on = ""
 
         log.info(f"Transport id: {id(self)} Connecting...")
         if self._connecting:
@@ -435,9 +464,10 @@ class EncryptedSocketClientTransport(ClientTransport):
 
         # this happens if proxy connection fails
         if self.failed_on:
+            log.error(f"Failed to connect. Failed on: {self.failed_on}")
             await self.disconnect()
             self._connecting = False
-            log.error(f"Failed to connect. Failed on: {self.failed_on}")
+
             return
 
         try:
@@ -512,6 +542,10 @@ class EncryptedSocketClientTransport(ClientTransport):
                 break
             except asyncio.IncompleteReadError as e:
                 # log.debug("EOF reached, socket closed")
+                self._connected = False
+                self.encrypted = False
+                break
+            except ConnectionResetError as e:
                 self._connected = False
                 self.encrypted = False
                 break
@@ -693,6 +727,8 @@ class EncryptedSocketClientTransport(ClientTransport):
 
             if isinstance(res, RpcReplyMessage):
                 res = res.payload
+            elif isinstance(res, LivelinessMessage):
+                ...
             else:
                 log.error(f"Waiting for RPC message but received something else: {res}")
             return res
@@ -707,7 +743,8 @@ class EncryptedSocketClientTransport(ClientTransport):
 
         if self.read_socket_task:
             self.read_socket_task.cancel()
-        # self.failed_on = ""
+
+        self.failed_on = ""
 
     async def disconnect(self):
         sockname = "Not connected"
@@ -717,7 +754,9 @@ class EncryptedSocketClientTransport(ClientTransport):
             f"Disconnect called for socket: {sockname}. Total channels before: {self.channels}"
         )
         self.channels -= 1
-        # this is dodgey, -1 is True
+        # this shouldn't happen but yeah
+        self.channels = max(0, self.channels)
+
         if self.channels:
             return
 
