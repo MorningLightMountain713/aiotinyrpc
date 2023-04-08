@@ -5,6 +5,8 @@ import re
 import time
 from pathlib import Path
 from typing import Callable, Optional
+import inspect
+from dataclasses import dataclass
 
 import aiofiles
 from rich.progress import (
@@ -15,7 +17,7 @@ from rich.progress import (
     TimeRemainingColumn,
     TransferSpeedColumn,
 )
-
+from fluxrpc.auth import SignatureAuthProvider
 from fluxrpc.transports import ClientTransport
 from fluxrpc.transports.socket.messages import (
     AesKeyMessage,
@@ -37,15 +39,6 @@ from fluxrpc.transports.socket.messages import (
     LivelinessMessage,
 )
 
-
-def bytes_to_human(num, suffix="B"):
-    for unit in ["", "K", "M", "G", "T", "P", "E", "Z"]:
-        if abs(num) < 1024.0:
-            return f"{num:3.1f}{unit}{suffix}"
-        num /= 1024.0
-    return f"{num:.1f}Yi{suffix}"
-
-
 import ssl
 import tempfile
 
@@ -63,7 +56,106 @@ from .symbols import (
     PROXY_AUTH_ADDRESS_REQUIRED,
     PROXY_AUTH_DENIED,
     PROXY_NO_SOCKET,
+    AUTH_TIMEOUT,
+    CHALLENGE_TIMEOUT,
+    ENCRYPTION_TIMEOUT,
+    FORWARDING_TIMEOUT,
 )
+
+
+def bytes_to_human(num, suffix="B"):
+    for unit in ["", "K", "M", "G", "T", "P", "E", "Z"]:
+        if abs(num) < 1024.0:
+            return f"{num:3.1f}{unit}{suffix}"
+        num /= 1024.0
+    return f"{num:.1f}Yi{suffix}"
+
+
+@dataclass
+class Session:
+    """A lazy loaded connection to a FluxVault Agent
+
+    A transport can only have one session, but many channels
+
+    Starting a session shows the intent of running tasks on an agent, it doesn't
+    start the connection. It's not until a task is actually run that the connection
+    is initiated.
+
+    Once it's initiated, it stays open until the session is ended.
+
+    This means that while a session is open, (a grouping of tasks running, maybe via
+    a few different function calls) you can still connect outside of the session and create
+    a channel. A channel is just a multiplexing of `connections` onto a single socket. Means
+    we only have to ever manage one set of encryption keys per Agent <-> Keeper relationship
+    """
+
+    transport: EncryptedSocketClientTransport
+    connected: bool = False
+    connection_attempted: bool = False
+    started: bool = False
+    signing_address: str = ""
+
+    async def __aenter__(self):
+        self.start()
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback):
+        self.end()
+
+    async def start(self, connect=False):
+        log.info(f"Session started for {self.transport.address}:{self.transport.port}")
+        log.info(f"Transport id: {id(self.transport)}")
+        self.started = True
+
+        if connect:
+            await self.connect()
+
+    async def connect(self, signing_key: str = ""):
+        self.connection_attempted = True
+
+        if signing_key:
+            auth_provider = SignatureAuthProvider(key=signing_key)
+            self.transport.auth_provider = auth_provider
+
+        await self.transport.connect()
+
+        if not self.transport.connected and signing_key:
+            log.error("Cannot connect after retrying with authentication...")
+            return
+
+        if self.transport.connected:
+            self.connected = True
+            return
+
+        log.info("Transport not connected... checking connection requirements...")
+        log.info(f"Failed on {self.transport.failed_on}")
+
+        if self.transport.failed_on == NO_SOCKET:
+            return
+
+        address_type = ""
+        # match/case
+        if self.transport.failed_on in [AUTH_ADDRESS_REQUIRED, AUTH_DENIED]:
+            address_type = "auth_address"
+        elif self.transport.failed_on in [
+            PROXY_AUTH_ADDRESS_REQUIRED,
+            PROXY_AUTH_DENIED,
+        ]:
+            address_type = "proxy_auth_address"
+
+        if address_type:
+            self.signing_address = getattr(self.transport, address_type)
+
+    def reset(self):
+        self.connected = False
+        self.connection_attempted = False
+        self.started = False
+        self.signing_address = ""
+
+    async def end(self):
+        if self.connected:
+            await self.transport.disconnect()
+        self.reset()
 
 
 class EncryptedSocketClientTransport(ClientTransport):
@@ -110,12 +202,15 @@ class EncryptedSocketClientTransport(ClientTransport):
         self.cert = cert
         self.key = key
         self.ca = ca
+        # change these to futures
         self.on_pty_data_callback = on_pty_data_callback
         self.on_pty_closed_callback = on_pty_closed_callback
+        # group these
         self.encrypted_event = asyncio.Event()
         self.forwarding_event = asyncio.Event()
         self.authentication_event = asyncio.Event()
         self.challenge_complete_event = asyncio.Event()
+
         self.channels = 0
         self.read_socket_task: asyncio.Task | None = None
         self._proxy_source = ()
@@ -131,6 +226,7 @@ class EncryptedSocketClientTransport(ClientTransport):
             TimeRemainingColumn(),
             # transient=True,
         )
+        self.session = Session(self)
 
         # ToDo: maybe have a alway connected flag and if set, we connect here
         # self.connect()
@@ -147,6 +243,10 @@ class EncryptedSocketClientTransport(ClientTransport):
     @property
     def address(self) -> str:
         return self._address
+
+    @property
+    def port(self) -> str:
+        return self._port
 
     @property
     def proxy_source(self) -> tuple:
@@ -383,7 +483,8 @@ class EncryptedSocketClientTransport(ClientTransport):
 
     async def connect(self):
         log.info(f"DEBUG: all tasks count: {len(asyncio.all_tasks())}")
-        # start fresh
+
+        # start fresh - not 100% on this
         self.failed_on = ""
 
         log.info(f"Transport id: {id(self)} Connecting...")
@@ -416,6 +517,7 @@ class EncryptedSocketClientTransport(ClientTransport):
             await asyncio.wait_for(self.challenge_complete_event.wait(), timeout=10)
         except asyncio.TimeoutError:
             await self.disconnect()
+            self.failed_on = CHALLENGE_TIMEOUT
             self._connecting = False
             log.error("Timed out waiting for challenge event, probably broken socket")
             return
@@ -425,6 +527,7 @@ class EncryptedSocketClientTransport(ClientTransport):
         if self.auth_required and not self.auth_provider:
             self.auth_error = "Auth required and no auth provider set"
             log.warning(self.auth_error)
+            self.failed_on = AUTH_ADDRESS_REQUIRED
             await self.disconnect()
             self._connecting = False
             return
@@ -434,6 +537,7 @@ class EncryptedSocketClientTransport(ClientTransport):
                 await asyncio.wait_for(self.authentication_event.wait(), timeout=10)
             except asyncio.TimeoutError:
                 await self.disconnect()
+                self.failed_on = AUTH_TIMEOUT
                 self._connecting = False
                 log.error(
                     "Timed out waiting for authentication event, probably broken socket"
@@ -444,6 +548,7 @@ class EncryptedSocketClientTransport(ClientTransport):
 
             if not self.authenticated:
                 log.error("Authentication error")
+                self.failed_on = AUTH_DENIED
                 await self.disconnect()
                 self._connecting = False
                 return
@@ -455,6 +560,7 @@ class EncryptedSocketClientTransport(ClientTransport):
         try:
             await asyncio.wait_for(self.forwarding_event.wait(), timeout=10)
         except asyncio.TimeoutError:
+            self.failed_on = FORWARDING_TIMEOUT
             await self.disconnect()
             self._connecting = False
             log.error("Timed out waiting for forwarding event, probably broken socket")
@@ -473,6 +579,7 @@ class EncryptedSocketClientTransport(ClientTransport):
         try:
             await asyncio.wait_for(self.encrypted_event.wait(), timeout=10)
         except asyncio.TimeoutError:
+            self.failed_on = ENCRYPTION_TIMEOUT
             await self.disconnect()
             self._connecting = False
             log.error("Timed out waiting for encrypted event, probably broken socket")
@@ -707,7 +814,7 @@ class EncryptedSocketClientTransport(ClientTransport):
         message: Message | bytes,
         expect_reply: bool = True,
     ) -> Message | None:
-        """Writes data on the socket"""
+        """Writes data on the socket, this is the main entrypoint"""
         # from upper RPC layer
         if isinstance(message, bytes):
             # should always be encrypted here?
@@ -722,8 +829,11 @@ class EncryptedSocketClientTransport(ClientTransport):
         await self.send(message.serialize())
 
         if expect_reply:
-            # let top layer catch this (asyncio.TimeoutError)
-            res = await asyncio.wait_for(self.messages.get(), timeout=15)
+            try:
+                res = await asyncio.wait_for(self.messages.get(), timeout=15)
+            except asyncio.TimeoutError:
+                log.error("Timed out waiting for response to message")
+                return
 
             if isinstance(res, RpcReplyMessage):
                 res = res.payload
@@ -744,14 +854,18 @@ class EncryptedSocketClientTransport(ClientTransport):
         if self.read_socket_task:
             self.read_socket_task.cancel()
 
-        self.failed_on = ""
-
     async def disconnect(self):
+        # this_frame = inspect.currentframe()
+        # caller_frame = inspect.getouterframes(this_frame, 2)
+        # print("caller name:", caller_frame[1][3])
+        # print(inspect.currentframe().f_back.f_code.co_name)
         sockname = "Not connected"
+        peername = "Not connected"
         if self.writer:
             sockname = self.writer.get_extra_info("sockname")
+            peername = self.writer.get_extra_info("peername")
         log.info(
-            f"Disconnect called for socket: {sockname}. Total channels before: {self.channels}"
+            f"Disconnect called for socket: {sockname} <-> {peername}. Total channels before: {self.channels}"
         )
         self.channels -= 1
         # this shouldn't happen but yeah

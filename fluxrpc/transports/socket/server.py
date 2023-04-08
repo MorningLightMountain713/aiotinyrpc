@@ -83,8 +83,12 @@ class EncryptablePeerGroup:
         peer: EncryptablePeer = self.get_peer(id)
         if peer:
             peer.read_socket_task.cancel()
-            peer.writer.close()
-            await peer.writer.wait_closed()
+            try:
+                peer.writer.close()
+                await peer.writer.wait_closed()
+            except (ConnectionResetError, BrokenPipeError):
+                pass
+
             self.peers = [x for x in self.peers if x.id != id]
 
     async def destroy_peer_timer(self, id, timeout):

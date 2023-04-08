@@ -62,7 +62,8 @@ class RPCClient(object):
             # sends and expects for reply if connection is not one way
             reply = self.transport.send_message(req.serialize(), not one_way)
 
-        if one_way:
+        if one_way or not reply:
+            # reply is None if Timeout. Should probably be returning an RPCError and catch
             return
 
         # waits for reply
@@ -95,7 +96,7 @@ class RPCClient(object):
         # this can raise TimeoutError but we let upper layer handle
         rep = await self._send_and_handle_reply(req, one_way)
 
-        if one_way:
+        if one_way or rep is None:
             return
 
         return rep.result

@@ -36,7 +36,6 @@ from Cryptodome.Cipher import AES
 # Abstract
 class Message:
     def serialize(self) -> bytes:
-        # ToDo: convert types to ints, lower overhead
         try:
             # figure it's cheaper to transmit ints that strings. Probably
             # should use structs
