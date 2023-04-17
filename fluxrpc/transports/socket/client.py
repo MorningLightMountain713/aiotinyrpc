@@ -96,7 +96,10 @@ class ChannelManager:
     cm: Channel | None = None
 
     def __bool__(self):
-        return any([x.in_use for x in self.channels])
+        return bool(self.channels)
+
+    def __repr__(self) -> str:
+        return str(self.count)
 
     def __aenter__(self):
         self.cm = self.get_channel()
@@ -176,7 +179,8 @@ class Session:
         self.end()
 
     async def start(self, connect=False):
-        log.info(f"Session started for {self.transport.address}:{self.transport.port}")
+        if not self.started:
+            log.info(f"Session started for {self.transport.address}:{self.transport.port}")
         # log.info(f"Transport id: {id(self.transport)}")
         self.started = True
 
@@ -614,7 +618,7 @@ class EncryptedSocketClientTransport(ClientTransport):
             log.error("No reader or writer... Error connecting")
             return
 
-        self.channels += 1
+        # self.channels += 1
         self.channels.add_channel()
 
         self.read_socket_task = asyncio.create_task(self.read_socket_loop())
