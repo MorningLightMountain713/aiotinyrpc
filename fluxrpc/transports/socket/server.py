@@ -44,6 +44,7 @@ from fluxrpc.transports.socket.messages import (
     SessionKeyMessage,
     TestMessage,
     LivelinessMessage,
+    AesKeyMessage,
 )
 
 
@@ -558,6 +559,7 @@ class EncryptedSocketServerTransport(ServerTransport):
         buffer = []
         while peer.reader and not peer.proxied and not peer.reader.at_eof():
             try:
+                # this needs timeout
                 data = await peer.reader.readuntil(separator=self.separator)
             except asyncio.exceptions.IncompleteReadError:
                 log.debug(f"Reader is at EOF. Peer: {peer.id}")
@@ -627,7 +629,9 @@ class EncryptedSocketServerTransport(ServerTransport):
                 continue
 
             # Encrypted message is the test message (peer isn't encrypted)
-            if isinstance(message, (SessionKeyMessage, EncryptedMessage)):
+            if isinstance(
+                message, (SessionKeyMessage, EncryptedMessage, AesKeyMessage)
+            ):
                 await self.handle_encryption_message(peer, message)
                 continue
 
@@ -639,7 +643,7 @@ class EncryptedSocketServerTransport(ServerTransport):
                 log.debug(
                     f"Message received (decrypted and decoded): {bson.decode(message.payload)})"
                 )
-                await self.rpc_messages.put((peer.id, message.payload))
+                await self.rpc_messages.put((peer.id, message.chan_id, message.payload))
 
             else:
                 log.error(f"Unknown message: {message}")
@@ -672,12 +676,12 @@ class EncryptedSocketServerTransport(ServerTransport):
         log.info(f"Serving on {addrs}")
 
     async def receive_message(self) -> tuple:
-        addr, message = await self.rpc_messages.get()
+        addr, channel, message = await self.rpc_messages.get()
         # message = message.as_dict()
-        return addr, message
+        return addr, channel, message
 
-    async def send_reply(self, context: tuple, data: bytes):
-        msg = RpcReplyMessage(data)
+    async def send_reply(self, context: tuple, channel: int, data: bytes):
+        msg = RpcReplyMessage(channel, data)
         peer = self.peers.get_peer(context)
 
         if not peer:

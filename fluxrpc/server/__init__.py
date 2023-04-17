@@ -32,12 +32,12 @@ class RPCServer(object):
     When this attribute is set to a callable this callable will be called directly
     after a message has been received and immediately after a reply is sent.
     The callable should accept three positional parameters:
-    
+
     :param str direction: Either '-->' for incoming or '<--' for outgoing data.
     :param any context: The context returned by :py:meth:`~aiotinrypc.transports.ServerTransport.receive_message`.
     :param bytes message: The message itself.
     Example:
-    
+
     .. code-block:: python
         def my_trace(direction, context, message):
             logger.debug('%s%s', direction, message)
@@ -45,7 +45,7 @@ class RPCServer(object):
         server.trace = my_trace
         server.serve_forever()
     will log all incoming and outgoing traffic of the RPC service.
-    
+
     Note that the ``message`` will be the data stream that is transported,
     not the interpreted meaning of that data.
     It is therefore possible that the binary stream is unreadable without further translation.
@@ -75,7 +75,6 @@ class RPCServer(object):
         while True:
             await self.receive_one_message()
 
-
     async def receive_one_message(self) -> None:
         """Handle a single request.
         Polls the transport for a new message.
@@ -88,15 +87,15 @@ class RPCServer(object):
         back to the client using the transport.
         """
         if self.transport.is_async:
-            context, message = await self.transport.receive_message()
+            context, channel, message = await self.transport.receive_message()
         else:
-            context, message = self.transport.receive_message()
+            context, channel, message = self.transport.receive_message()
         if callable(self.trace):
             self.trace("-->", context, message)
 
-        self.loop.create_task(self.handle_message(context, message))
+        self.loop.create_task(self.handle_message(context, channel, message))
 
-    async def handle_message(self, context: Any, message: bytes) -> None:
+    async def handle_message(self, context: Any, channel: int, message: bytes) -> None:
         """Parse, process and reply a single request."""
         try:
             request = self.protocol.parse_request(message)
@@ -113,6 +112,6 @@ class RPCServer(object):
             if callable(self.trace):
                 self.trace("<--", context, result)
             if self.transport.is_async:
-                await self.transport.send_reply(context, result)
+                await self.transport.send_reply(context, channel, result)
             else:
-                self.transport.send_reply(context, result)
+                self.transport.send_reply(context, channel, result)

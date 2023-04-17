@@ -6,7 +6,8 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 import inspect
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from contextlib import asynccontextmanager
 
 import aiofiles
 from rich.progress import (
@@ -72,6 +73,78 @@ def bytes_to_human(num, suffix="B"):
 
 
 @dataclass
+class Channel:
+    """A dedicated message queue to segregate messages per flow on the socket"""
+
+    id: int
+    in_use: bool = False
+    q: asyncio.Queue = field(default_factory=asyncio.Queue)
+
+    async def send_message(self):
+        ...
+
+
+class ChannelError(Exception):
+    ...
+
+
+@dataclass
+class ChannelManager:
+    """Handles the day to day life of a channel"""
+
+    channels: list[Channel] = field(default_factory=list)
+    cm: Channel | None = None
+
+    def __bool__(self):
+        return any([x.in_use for x in self.channels])
+
+    def __aenter__(self):
+        self.cm = self.get_channel()
+        return self.cm
+
+    async def __aexit__(self, exc_type, exc_value, traceback):
+        self.cm.in_use = False
+        self.cm = None
+
+    @property
+    def count(self):
+        """Returns count of used / non used channels"""
+        return len(self.channels)
+
+    def get_channel(self) -> Channel:
+        chan: Channel = next(filter(lambda x: not x.in_use, self.channels), None)
+
+        if not chan:
+            raise ChannelError("No free channels... did you call connect?")
+
+        chan.in_use = True
+
+        return chan
+
+    def release_channel(self, id):
+        for chan in self.channels:
+            if id == chan.id:
+                chan.in_use = False
+
+    def get_channel_by_id(self, id) -> Channel | None:
+        return next(filter(lambda x: x.id == id, self.channels), None)
+
+    def add_channel(self):
+        id = len(self.channels)
+        self.channels.append(Channel(id))
+
+    def remove_all_channels(self):
+        self.channels = []
+
+    def remove_channel(self):
+        """Remove the first non used channel"""
+        for channel in self.channels.copy():
+            if channel.in_use == False:
+                self.channels.remove(channel)
+                break
+
+
+@dataclass
 class Session:
     """A lazy loaded connection to a FluxVault Agent
 
@@ -104,7 +177,7 @@ class Session:
 
     async def start(self, connect=False):
         log.info(f"Session started for {self.transport.address}:{self.transport.port}")
-        log.info(f"Transport id: {id(self.transport)}")
+        # log.info(f"Transport id: {id(self.transport)}")
         self.started = True
 
         if connect:
@@ -211,7 +284,10 @@ class EncryptedSocketClientTransport(ClientTransport):
         self.authentication_event = asyncio.Event()
         self.challenge_complete_event = asyncio.Event()
 
-        self.channels = 0
+        # rename this to channels
+        self.channels = ChannelManager()
+
+        # self.channels = 0
         self.read_socket_task: asyncio.Task | None = None
         self._proxy_source = ()
         self.progress = Progress(
@@ -473,13 +549,32 @@ class EncryptedSocketClientTransport(ClientTransport):
         await self.send(msg.serialize())
 
     async def ensure_connected(self):
-        while not await self.writeable():
+        if not await self.writeable():
             await self.connect()
-            if not self.failed_on:
-                break
-            log.info(f"Sleeping 20s")
-            await asyncio.sleep(20)
-        log.info("Socket is writeable")
+
+        while not await self.writeable():
+            log.warning(
+                f"Reconnection to {self.address}:{self.port} failed, sleeping 30s"
+            )
+            await asyncio.sleep(30)
+            log.info(f"Reconnecting to {self.address}:{self.port}")
+            await self.connect()
+            # if not self.failed_on:
+            #     break
+
+        log.info(f"Socket to {self.address}:{self.port} is writeable")
+
+    @asynccontextmanager
+    async def connection_manager(self):
+        con = await self.connect()
+
+        if not self.connected:
+            raise ConnectionError()
+
+        try:
+            yield con
+        finally:
+            await self.disconnect()
 
     async def connect(self):
         log.info(f"DEBUG: all tasks count: {len(asyncio.all_tasks())}")
@@ -487,20 +582,30 @@ class EncryptedSocketClientTransport(ClientTransport):
         # start fresh - not 100% on this
         self.failed_on = ""
 
-        log.info(f"Transport id: {id(self)} Connecting...")
+        # log.info(f"Transport id: {id(self)} Connecting...")
         if self._connecting:
             log.info("Connecting... adding channel")
-            self.channels += 1
+            # self.channels += 1
+            self.channels.add_channel()
 
         while self._connecting or self._disconnecting:
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(0.02)
+
+        if self.failed_on == NO_SOCKET:
+            # we were waiting on the joker before us, and he just finished and failed on no socket, no point
+            # retrying immediately
+            # do we need to remove channel?
+            return
 
         if self.channels:
-            self.channels += 1
+            # self.channels += 1
+            self.channels.add_channel()
+
             log.info(f"Adding new channel. Total: {self.channels}")
             return
 
         self._connecting = True
+
         await self._connect()
 
         if not self.reader and not self.writer:
@@ -510,6 +615,7 @@ class EncryptedSocketClientTransport(ClientTransport):
             return
 
         self.channels += 1
+        self.channels.add_channel()
 
         self.read_socket_task = asyncio.create_task(self.read_socket_loop())
 
@@ -637,7 +743,7 @@ class EncryptedSocketClientTransport(ClientTransport):
 
     async def read_socket_loop(self):
         extra_messages = []
-        timeout = 40
+        timeout = 60
         while self.reader and not self.reader.at_eof():
             try:
                 coro = self.reader.readuntil(self.separator)
@@ -646,20 +752,24 @@ class EncryptedSocketClientTransport(ClientTransport):
                 log.error(f"Timeout of {timeout}s exceeded for socket read, returning")
                 self._connected = False
                 self.encrypted = False
+                self.channels.remove_all_channels()
                 break
             except asyncio.IncompleteReadError as e:
                 # log.debug("EOF reached, socket closed")
                 self._connected = False
                 self.encrypted = False
+                self.channels.remove_all_channels()
                 break
             except ConnectionResetError as e:
                 self._connected = False
                 self.encrypted = False
+                self.channels.remove_all_channels()
                 break
             except ssl.SSLError as e:
                 log.error(e)
                 self._connected = False
                 self.encrypted = False
+                self.channels.remove_all_channels()
                 break
             except asyncio.LimitOverrunError as e:
                 data = []
@@ -690,6 +800,7 @@ class EncryptedSocketClientTransport(ClientTransport):
                 print(repr(e))
                 self._connected = False
                 self.encrypted = False
+                self.channels.remove_all_channels()
                 break
 
             message = data.rstrip(self.separator)
@@ -716,7 +827,12 @@ class EncryptedSocketClientTransport(ClientTransport):
                         await self.on_pty_data_callback(our_socket, message.data)
 
                     case RpcReplyMessage():
-                        await self.messages.put(message)
+                        chan = self.channels.get_channel_by_id(message.chan_id)
+
+                        if chan:
+                            await chan.q.put(message)
+                        else:
+                            raise ChannelError(f"Unknown channel id: {message.chan_id}")
 
                     case ChallengeMessage() | AuthReplyMessage():
                         await self.authentication_message_handler(message)
@@ -818,7 +934,8 @@ class EncryptedSocketClientTransport(ClientTransport):
         # from upper RPC layer
         if isinstance(message, bytes):
             # should always be encrypted here?
-            message = RpcRequestMessage(message)
+            chan = self.channels.get_channel()
+            message = RpcRequestMessage(chan.id, message)
             # print("Payload size", bytes_to_human(len(message.payload)))
         if self.encrypted:
             log.debug(f"Sending encrypted message: {message}")
@@ -830,10 +947,12 @@ class EncryptedSocketClientTransport(ClientTransport):
 
         if expect_reply:
             try:
-                res = await asyncio.wait_for(self.messages.get(), timeout=15)
+                res = await asyncio.wait_for(chan.q.get(), timeout=45)
             except asyncio.TimeoutError:
-                log.error("Timed out waiting for response to message")
+                log.error(f"Timed out waiting for response to message: {message}")
                 return
+
+            self.channels.release_channel(chan.id)
 
             if isinstance(res, RpcReplyMessage):
                 res = res.payload
@@ -867,9 +986,10 @@ class EncryptedSocketClientTransport(ClientTransport):
         log.info(
             f"Disconnect called for socket: {sockname} <-> {peername}. Total channels before: {self.channels}"
         )
-        self.channels -= 1
+        self.channels.remove_channel()
+        # self.channels -= 1
         # this shouldn't happen but yeah
-        self.channels = max(0, self.channels)
+        # self.channels = max(0, self.channels)
 
         if self.channels:
             return

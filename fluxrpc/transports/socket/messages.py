@@ -102,11 +102,13 @@ class SerializedMessage(Message):
 
 @dataclass
 class RpcReplyMessage(Message):
+    chan_id: int
     payload: bytes
 
 
 @dataclass
 class RpcRequestMessage(Message):
+    chan_id: int
     payload: bytes
 
 
