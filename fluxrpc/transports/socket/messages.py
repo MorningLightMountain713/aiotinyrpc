@@ -58,7 +58,7 @@ class Message:
         del decoded["_type"]
         return klass(**decoded)
 
-    def encrypt(self, key) -> Any:
+    def encrypt(self, key) -> EncryptedMessage:
         """Take a bytes stream and AES key and encrypt it"""
         cipher = AES.new(key, AES.MODE_EAX)
         ciphertext, tag = cipher.encrypt_and_digest(self.serialize())
@@ -150,12 +150,16 @@ class EncryptedMessage(Message):
     tag: str
     ciphertext: str
 
-    def decrypt(self, key):
+    def decrypt(self, aes_key: bytes):
+        # store these up from so we don't have to do it every message
         nonce = bytes.fromhex(self.nonce)
         tag = bytes.fromhex(self.tag)
         ciphertext = bytes.fromhex(self.ciphertext)
-        cipher = AES.new(key, AES.MODE_EAX, nonce)
+
+        # this can raise ValueError
+        cipher = AES.new(aes_key, AES.MODE_EAX, nonce)
         self.msg = cipher.decrypt_and_verify(ciphertext, tag)
+
         return self.deserialize()
 
 
@@ -189,3 +193,8 @@ class FileEntryStreamMessage(Message):
 @dataclass
 class LivelinessMessage(Message):
     text: str = "Echo"
+
+
+@dataclass
+class AesRekeyMessage(Message):
+    fill: bytes

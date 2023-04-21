@@ -2,5 +2,8 @@
     "python.formatting.provider": "black",
     "files.exclude": {
         "**/.DS_Store": false
+    },
+    "[python]": {
+        "editor.defaultFormatter": "ms-python.black-formatter"
     }
 }

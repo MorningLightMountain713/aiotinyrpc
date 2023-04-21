@@ -44,7 +44,7 @@ from fluxrpc.transports.socket.messages import (
     SessionKeyMessage,
     TestMessage,
     LivelinessMessage,
-    AesKeyMessage,
+    AesRekeyMessage,
 )
 
 
@@ -58,15 +58,18 @@ def bytes_to_human(num, suffix="B"):
 
 @dataclass
 class KeyData:
-    rsa_key: str = ""
     aes_key: str = ""
-    private: str = ""
-    public: str = ""
+    rsa_private: str = ""
+    rsa_public: str = ""
+
+    def burn_rsa_keys(self):
+        self.rsa_private = ""
+        self.rsa_public = ""
 
     def generate(self):
-        self.rsa_key = RSA.generate(2048)
-        self.private = self.rsa_key.export_key()
-        self.public = self.rsa_key.publickey().export_key()
+        rsa_key = RSA.generate(2048)
+        self.rsa_private = rsa_key.export_key()
+        self.rsa_public = rsa_key.publickey().export_key()
 
 
 @dataclass
@@ -84,6 +87,9 @@ class EncryptablePeerGroup:
         peer: EncryptablePeer = self.get_peer(id)
         if peer:
             peer.read_socket_task.cancel()
+            for task in peer.in_flight_messages:
+                task.cancel()
+
             try:
                 peer.writer.close()
                 await peer.writer.wait_closed()
@@ -136,6 +142,7 @@ class EncryptablePeer:
     proxied: bool = False
     timer: asyncio.Task | None = None
     read_socket_task: asyncio.Task | None = None
+    in_flight_messages: list[asyncio.Task] = field(default_factory=list)
     challenge_complete_event: asyncio.Event = field(default_factory=asyncio.Event)
     forwarding_event: asyncio.Event = field(default_factory=asyncio.Event)
     fh: dict[str, BinaryIO] = field(default_factory=dict)
@@ -263,9 +270,12 @@ class EncryptedSocketServerTransport(ServerTransport):
         aes_key_message = enc_aes_key_message.decrypt(session_key)
         return aes_key_message.aes_key
 
-    async def begin_encryption(self, peer):
+    async def begin_encryption(self, peer: EncryptablePeer, rekey: bool = False):
         peer.key_data.generate()
-        msg = RsaPublicKeyMessage(peer.key_data.public)
+        msg = RsaPublicKeyMessage(peer.key_data.rsa_public)
+
+        if rekey:
+            msg.encrypt()
 
         await peer.send(msg.serialize())
         await self.peers.start_peer_timeout(peer.id)
@@ -326,6 +336,10 @@ class EncryptedSocketServerTransport(ServerTransport):
         reply = LivelinessMessage(msg.text[::-1])
         await peer.send(reply.serialize())
 
+    async def handle_aes_rekey_message(self, msg: AesRekeyMessage):
+        # still figuring what to, is there any content in this message?
+        self.begin_encryption(rekey=True)
+
     async def handle_forwarding_message(self, peer: EncryptablePeer, msg: ProxyMessage):
         resp = ProxyResponseMessage(False)
         if msg.proxy_required:
@@ -349,13 +363,18 @@ class EncryptedSocketServerTransport(ServerTransport):
         await peer.send(resp.serialize())
         peer.forwarding_event.set()
 
-    async def handle_encryption_message(self, peer, msg):
+    async def handle_encryption_message(
+        self, peer: EncryptablePeer, msg: SessionKeyMessage | EncryptedMessage
+    ):
         peer.timer.cancel()
 
         if isinstance(msg, SessionKeyMessage):
-            aes_key = self.parse_session_key_message(peer.key_data.private, msg)
+            aes_key = self.parse_session_key_message(peer.key_data.rsa_private, msg)
 
             peer.key_data.aes_key = aes_key
+            print("aeskey", aes_key)
+
+            peer.key_data.burn_rsa_keys()
 
             # Send a test encryption request, always include random data
             peer.random = get_random_bytes(16).hex()
@@ -363,6 +382,7 @@ class EncryptedSocketServerTransport(ServerTransport):
             encrypted_test_msg = test_msg.encrypt(aes_key)
 
             await peer.send(encrypted_test_msg.serialize())
+            print("message sent!")
 
         if isinstance(msg, EncryptedMessage):
             response = msg.decrypt(peer.key_data.aes_key)
@@ -589,7 +609,12 @@ class EncryptedSocketServerTransport(ServerTransport):
                 buffer = []
 
             message = data.rstrip(self.separator)
-            await self.process_messages(peer, [message])
+
+            t = asyncio.create_task(
+                self.process_messages(peer, [message]), name=f"process_messages"
+            )
+
+            peer.in_flight_messages.append(t)
 
         log.debug(f"Read socket loop finished. peer.proxied: {peer.proxied}")
         if not peer.proxied:
@@ -607,46 +632,49 @@ class EncryptedSocketServerTransport(ServerTransport):
                 print("end", message[-100:])
                 continue
 
-            log.debug(f"Received : {type(message).__name__}")
+            log.info(f"Received : {type(message).__name__}")
 
             if peer.encrypted:
                 message = message.decrypt(peer.key_data.aes_key)
 
-            if isinstance(message, (PtyMessage, PtyResizeMessage)):
-                peer.handle_pty_message(message)
-                continue
+            match message:
+                case AesRekeyMessage():
+                    await peer.handle_aes_rekey_message()
 
-            if isinstance(message, FileEntryStreamMessage):
-                await peer.handle_file_stream_message(message)
-                continue
+                case PtyMessage() | PtyResizeMessage():
+                    peer.handle_pty_message(message)
 
-            if isinstance(message, LivelinessMessage):
-                await self.handle_liveliness_message(peer, message)
-                continue
+                case FileEntryStreamMessage():
+                    await peer.handle_file_stream_message(message)
 
-            if isinstance(message, ChallengeReplyMessage):
-                await self.handle_auth_message(peer, message)
-                continue
+                case LivelinessMessage():
+                    await self.handle_liveliness_message(peer, message)
 
-            # Encrypted message is the test message (peer isn't encrypted)
-            if isinstance(
-                message, (SessionKeyMessage, EncryptedMessage, AesKeyMessage)
-            ):
-                await self.handle_encryption_message(peer, message)
-                continue
+                case ChallengeReplyMessage():
+                    await self.handle_auth_message(peer, message)
 
-            if isinstance(message, ProxyMessage):
-                await self.handle_forwarding_message(peer, message)
-                continue
+                # Encrypted message is the test message (peer isn't encrypted)
+                case SessionKeyMessage() | EncryptedMessage():
+                    await self.handle_encryption_message(peer, message)
 
-            if isinstance(message, RpcRequestMessage):
-                log.debug(
-                    f"Message received (decrypted and decoded): {bson.decode(message.payload)})"
-                )
-                await self.rpc_messages.put((peer.id, message.chan_id, message.payload))
+                case ProxyMessage():
+                    await self.handle_forwarding_message(peer, message)
 
-            else:
-                log.error(f"Unknown message: {message}")
+                case RpcRequestMessage():
+                    log.debug(
+                        f"Message received (decrypted and decoded): {bson.decode(message.payload)})"
+                    )
+                    await self.rpc_messages.put(
+                        (peer.id, message.chan_id, message.payload)
+                    )
+
+                case _:
+                    log.error(f"Unknown message: {message}")
+
+        # we hold a reference to the task in case the read socket loop ends and we have messages
+        # still being processed - we ditch them as the socket is probably toast
+        task = asyncio.current_task()
+        peer.in_flight_messages.remove(task)
 
     async def stop_server(self):
         log.info("Stopping server")

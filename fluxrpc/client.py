@@ -54,13 +54,23 @@ class RPCClient(object):
     def connected(self):
         return self.transport.connected
 
-    async def _send_and_handle_reply(self, req: RPCRequest, one_way: bool = False):
+    async def _send_and_handle_reply(
+        self,
+        req: RPCRequest,
+        one_way: bool = False,
+        timeout: int = 45,
+        chan_id: int | None = None,
+    ):
         if self.transport.is_async:
-            reply = await self.transport.send_message(req.serialize(), not one_way)
+            reply = await self.transport.send_message(
+                req.serialize(), not one_way, timeout, chan_id
+            )
 
         else:
             # sends and expects for reply if connection is not one way
-            reply = self.transport.send_message(req.serialize(), not one_way)
+            reply = self.transport.send_message(
+                req.serialize(), not one_way, timeout, chan_id
+            )
 
         if one_way or not reply:
             # reply is None if Timeout. Should probably be returning an RPCError and catch
@@ -80,6 +90,8 @@ class RPCClient(object):
         args: List = [],
         kwargs: Dict = {},
         one_way: bool = False,
+        timeout: int = 45,
+        chan_id: int | None = None,
     ) -> Any:
         """Calls the requested method and returns the result.
 
@@ -94,7 +106,8 @@ class RPCClient(object):
         req = self.protocol.create_request(method, args, kwargs, one_way)
 
         # this can raise TimeoutError but we let upper layer handle
-        rep = await self._send_and_handle_reply(req, one_way)
+
+        rep = await self._send_and_handle_reply(req, one_way, timeout, chan_id)
 
         if one_way or rep is None:
             return
@@ -138,7 +151,9 @@ class RPCClient(object):
                 threads.append(self._send_and_handle_reply(req, False, tr, True))
             return threads
 
-    def get_proxy(self, prefix: str = "", plugins: list = []) -> "RPCProxy":
+    def get_proxy(
+        self, prefix: str = "", plugins: list = [], exclusive: bool = False
+    ) -> "RPCProxy":
         """Convenience method for creating a proxy.
 
         :param prefix: Passed on to :py:class:`~tinyrpc.client.RPCProxy`.
@@ -147,7 +162,7 @@ class RPCClient(object):
         """
         # plugins = await self.call("list_plugins", one_way=False)
 
-        return RPCProxy(self, prefix, plugins)
+        return RPCProxy(self, prefix, plugins, exclusive)
 
     def batch_call(self, calls: List[RPCCallTo]) -> RPCBatchResponse:
         """Experimental, use at your own peril."""
@@ -176,10 +191,13 @@ class RPCProxy(object):
         client: RPCClient,
         prefix: str = "",
         plugins: list = [],
+        exclusive: bool = False,
     ) -> None:
         self.client = client
         self.prefix = prefix
         self.one_way = False
+        self.timeout: int = 45
+        self.chan_id: int | None = None
         self.plugins = plugins
 
         for plugin in plugins:
@@ -192,9 +210,15 @@ class RPCProxy(object):
                 ),
             )
 
+        if exclusive:
+            self.chan_id = self.client.transport.get_exclusive_channel()
+
     def notify(self):
         """Sets the next rpc call as a notification"""
         self.one_way = True
+
+    def set_timeout(self, timeout: int):
+        self.timeout = timeout
 
     def get_transport(self):
         return self.client.transport
@@ -205,13 +229,17 @@ class RPCProxy(object):
         """
         # this is necessary. Even copy.copy doesn't work. For some reason this is pass by reference if using self.one_way
         tmp_one_way = self.one_way
+        tmp_timeout = self.timeout
         proxy_func = lambda *args, **kwargs: self.client.call(
             self.prefix + name,
             args,
             kwargs,
             one_way=tmp_one_way,
+            timeout=tmp_timeout,
+            chan_id=self.chan_id,
         )
         # above was pass by value
         self.one_way = False
+        self.timeout = 45
 
         return proxy_func

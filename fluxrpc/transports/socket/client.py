@@ -8,6 +8,7 @@ from typing import Callable, Optional
 import inspect
 from dataclasses import dataclass, field
 from contextlib import asynccontextmanager
+from collections import deque
 
 import aiofiles
 from rich.progress import (
@@ -38,6 +39,7 @@ from fluxrpc.transports.socket.messages import (
     SessionKeyMessage,
     TestMessage,
     LivelinessMessage,
+    AesRekeyMessage,
 )
 
 import ssl
@@ -63,6 +65,9 @@ from .symbols import (
     FORWARDING_TIMEOUT,
 )
 
+# How often we generate a Rekey message; Forces a full encryption interchange
+REKEY_TIMER = 60  # seconds
+
 
 def bytes_to_human(num, suffix="B"):
     for unit in ["", "K", "M", "G", "T", "P", "E", "Z"]:
@@ -77,6 +82,7 @@ class Channel:
     """A dedicated message queue to segregate messages per flow on the socket"""
 
     id: int
+    exclusive: bool = False
     in_use: bool = False
     q: asyncio.Queue = field(default_factory=asyncio.Queue)
 
@@ -93,6 +99,7 @@ class ChannelManager:
     """Handles the day to day life of a channel"""
 
     channels: list[Channel] = field(default_factory=list)
+    channel_count: int = 0
     cm: Channel | None = None
 
     def __bool__(self):
@@ -101,30 +108,56 @@ class ChannelManager:
     def __repr__(self) -> str:
         return str(self.count)
 
-    def __aenter__(self):
-        self.cm = self.get_channel()
-        return self.cm
+    # def __aenter__(self):
+    #     self.cm = self.get_channel()
+    #     return self.cm
 
-    async def __aexit__(self, exc_type, exc_value, traceback):
-        self.cm.in_use = False
-        self.cm = None
+    # async def __aexit__(self, exc_type, exc_value, traceback):
+    #     self.cm.in_use = False
+    #     self.cm = None
 
     @property
     def count(self):
         """Returns count of used / non used channels"""
         return len(self.channels)
 
-    def get_channel(self) -> Channel:
-        chan: Channel = next(filter(lambda x: not x.in_use, self.channels), None)
+    def get_channel(
+        self, chan_id: int | None = None, exclusive: bool = False
+    ) -> Channel | None:
+        if chan_id:
+            chan = self.get_channel_by_id(chan_id)
+
+        elif exclusive:
+            chan: Channel = next(
+                filter(lambda x: not x.in_use and x.exclusive, self.channels), None
+            )
+
+        else:
+            chan: Channel = next(
+                filter(lambda x: not x.in_use and not x.exclusive, self.channels), None
+            )
 
         if not chan:
-            raise ChannelError("No free channels... did you call connect?")
+            return
+
+        while not chan.q.empty():
+            msg = chan.q.get_nowait()
+            print("REMOVING STALE MESSAGE", msg)
 
         chan.in_use = True
 
         return chan
 
-    def release_channel(self, id):
+    # def refresh_channel_id(self, id):
+    #     """Channel timed out, dump id and add a new one"""
+    #     chan = self.get_channel_by_id(id)
+
+    #     if not chan:
+    #         return
+
+    #     chan.id = self.get_next_free_id()
+
+    async def release_channel(self, id):
         for chan in self.channels:
             if id == chan.id:
                 chan.in_use = False
@@ -132,17 +165,30 @@ class ChannelManager:
     def get_channel_by_id(self, id) -> Channel | None:
         return next(filter(lambda x: x.id == id, self.channels), None)
 
-    def add_channel(self):
-        id = len(self.channels)
-        self.channels.append(Channel(id))
+    def get_next_free_id(self) -> int:
+        free_id = self.channel_count
+        self.channel_count += 1
+
+        return free_id
+
+    def add_channel(self, exclusive: bool = False):
+        id = self.get_next_free_id()
+        # id = len(self.channels)
+        self.channels.append(Channel(id, exclusive))
 
     def remove_all_channels(self):
         self.channels = []
 
-    def remove_channel(self):
-        """Remove the first non used channel"""
+    def remove_channel(self, chan_id: int | None):
+        """Remove the first non used channel or an exclusive channel if chan_id used"""
+        if chan_id:
+            chan = self.get_channel_by_id(chan_id)
+            if chan:
+                self.channels.remove(chan)
+            return
+
         for channel in self.channels.copy():
-            if channel.in_use == False:
+            if not channel.in_use and not channel.exclusive:
                 self.channels.remove(channel)
                 break
 
@@ -180,7 +226,9 @@ class Session:
 
     async def start(self, connect=False):
         if not self.started:
-            log.info(f"Session started for {self.transport.address}:{self.transport.port}")
+            log.info(
+                f"Session started for {self.transport.address}:{self.transport.port}"
+            )
         # log.info(f"Transport id: {id(self.transport)}")
         self.started = True
 
@@ -262,6 +310,7 @@ class EncryptedSocketClientTransport(ClientTransport):
         self._connected = False
         self._connecting = False
         self._disconnecting = False
+        self.aes_keys: deque = deque([], maxlen=2)
         self.debug = debug
         self.is_async = True
         self.encrypted = False
@@ -288,6 +337,7 @@ class EncryptedSocketClientTransport(ClientTransport):
         self.authentication_event = asyncio.Event()
         self.challenge_complete_event = asyncio.Event()
 
+        self.rekey_manager: asyncio.Task | None = None
         # rename this to channels
         self.channels = ChannelManager()
 
@@ -307,6 +357,8 @@ class EncryptedSocketClientTransport(ClientTransport):
             # transient=True,
         )
         self.session = Session(self)
+        self.sockname = "Not connected"
+        self.peername = "Not connected"
 
         # ToDo: maybe have a alway connected flag and if set, we connect here
         # self.connect()
@@ -412,6 +464,15 @@ class EncryptedSocketClientTransport(ClientTransport):
 
         return True if res.text == "ohcE" else False
 
+    def get_exclusive_channel(self) -> int | None:
+        chan: Channel = self.channels.get_channel(exclusive=True)
+        if not chan:
+            raise ChannelError(
+                "No exclusive channels, did you request it when connecting?"
+            )
+
+        return chan.id
+
     ## handlers
 
     async def authentication_message_handler(self, msg):
@@ -501,14 +562,46 @@ class EncryptedSocketClientTransport(ClientTransport):
             await self.send(resp.serialize())
         self.forwarding_event.set()
 
+    def set_rekey(self, value: bool):
+        self.rekeying = value
+
+    def decrypt(self, msg: EncryptedMessage) -> Message:
+        print("decrypto")
+        try:
+            decrypted = msg.decrypt(self.aes_keys[0])
+        except ValueError as e:  # wrong key or no keys
+            if self.rekeying:
+                decrypted = msg.decrypt(self.aes_keys[1])
+            else:
+                raise e from None
+        except Exception as e:
+            print(repr(e))
+            exit(0)
+
+        print(decrypted)
+        return decrypted
+
     async def encryption_message_handler(self, msg):
+        # this is always received before encrypted message
         if isinstance(msg, RsaPublicKeyMessage):
             rsa_public_key = msg.key.decode("utf-8")
 
-            self.aeskey = get_random_bytes(16).hex().encode("utf-8")
+            new_aes_key = get_random_bytes(16).hex().encode("utf-8")
+
+            try:
+                # this is a rekey event
+                if self.encrypted:
+                    self.rekeying = True
+                    self.loop.call_later(1, self.set_rekey, False)
+
+                self.aes_keys.append(new_aes_key)
+            except Exception as e:
+                print(repr(e))
+                exit(0)
+
             try:
                 session_key_message = self.session_key_message(
-                    rsa_public_key, self.aeskey
+                    rsa_public_key, new_aes_key
                 )
             except ValueError:
                 # ToDo: move this to received message
@@ -517,11 +610,19 @@ class EncryptedSocketClientTransport(ClientTransport):
                 await self.writer.wait_closed()
                 self._connected = False
                 return
+            except Exception as e:
+                print(repr(e))
+                exit(0)
 
-            await self.send(session_key_message.serialize())
+            try:
+                await self.send(session_key_message.serialize())
+            except Exception as e:
+                print(e)
+                print("blah")
 
         if isinstance(msg, EncryptedMessage):
-            decrypted_test_message = msg.decrypt(self.aeskey)
+            decrypted_test_message = self.decrypt(msg)
+            print("again", decrypted_test_message)
 
             if not decrypted_test_message.text == "TestEncryptionMessage":
                 log.error("Malformed test aes message received... skipping")
@@ -535,7 +636,12 @@ class EncryptedSocketClientTransport(ClientTransport):
 
             reversed_fill = decrypted_test_message.fill[::-1]
             msg = TestMessage(reversed_fill, "TestEncryptionMessageResponse")
-            msg = msg.encrypt(self.aeskey)
+            # use the newest key for encryption
+            try:
+                msg = msg.encrypt(self.aes_keys[-1])
+            except Exception as e:
+                print(repr(e))
+                exit(0)
             await self.send(msg.serialize())
             self.encrypted_event.set()
 
@@ -580,17 +686,34 @@ class EncryptedSocketClientTransport(ClientTransport):
         finally:
             await self.disconnect()
 
-    async def connect(self):
-        log.info(f"DEBUG: all tasks count: {len(asyncio.all_tasks())}")
+    async def send_rekey_every(self, commanded_delay: int):
+        """Will send a rekey message to the agent every <delay> seconds"""
+        print("Starting RE-KEY")
+        delay = commanded_delay
+        while True:
+            await asyncio.sleep(delay)
+            delay = commanded_delay
+
+            start = time.monotonic()
+            msg = AesRekeyMessage(get_random_bytes(4))
+            msg.encrypt(self.aes_keys[-1])
+
+            await self.send(msg.serialize())
+
+            delay = delay - (time.monotonic() - start)
+
+    async def connect(self, exclusive: bool = False):
+        # log.info(f"DEBUG: all tasks count: {len(asyncio.all_tasks())}")
+        channel = None
 
         # start fresh - not 100% on this
         self.failed_on = ""
 
         # log.info(f"Transport id: {id(self)} Connecting...")
-        if self._connecting:
-            log.info("Connecting... adding channel")
-            # self.channels += 1
-            self.channels.add_channel()
+        # if self._connecting:
+        #     log.info("Connecting... adding channel")
+        #     # isn't this wrong???
+        #     channel = self.channels.add_channel(exclusive)
 
         while self._connecting or self._disconnecting:
             await asyncio.sleep(0.02)
@@ -603,10 +726,10 @@ class EncryptedSocketClientTransport(ClientTransport):
 
         if self.channels:
             # self.channels += 1
-            self.channels.add_channel()
+            channel = self.channels.add_channel(exclusive)
 
-            log.info(f"Adding new channel. Total: {self.channels}")
-            return
+            # log.info(f"Adding new channel. Total: {self.channels}")
+            return channel
 
         self._connecting = True
 
@@ -619,7 +742,7 @@ class EncryptedSocketClientTransport(ClientTransport):
             return
 
         # self.channels += 1
-        self.channels.add_channel()
+        channel = self.channels.add_channel(exclusive)
 
         self.read_socket_task = asyncio.create_task(self.read_socket_loop())
 
@@ -702,6 +825,10 @@ class EncryptedSocketClientTransport(ClientTransport):
         self._connected = True
         self._connecting = False
 
+        self.rekey_manager = asyncio.create_task(self.send_rekey_every(REKEY_TIMER))
+
+        return channel
+
     async def _connect(self):
         """Connects to socket server. Tries a max of 3 times"""
         log.info(f"Opening connection to {self._address} on port {self._port}")
@@ -712,12 +839,14 @@ class EncryptedSocketClientTransport(ClientTransport):
             try:
                 self.reader, self.writer = await asyncio.wait_for(con, timeout=3)
             except asyncio.TimeoutError:
-                log.warn(f"Timeout error connecting to {self._address}")
+                log.warning(f"Timeout error connecting to {self._address}")
             except ConnectionError:
-                log.warn(f"Connection error connecting to {self._address}")
+                log.warning(f"Connection error connecting to {self._address}")
             except OSError:
-                log.warn(f"Network error connection to {self._address}")
+                log.warning(f"Network error connection to {self._address}")
             else:
+                self.sockname = self.writer.get_extra_info("sockname")
+                self.peername = self.writer.get_extra_info("peername")
                 break
             await asyncio.sleep(n)
 
@@ -748,32 +877,35 @@ class EncryptedSocketClientTransport(ClientTransport):
     async def read_socket_loop(self):
         extra_messages = []
         timeout = 60
+        # peername = self.writer.get_extra_info("peername")
         while self.reader and not self.reader.at_eof():
+            # start = time.monotonic()
             try:
                 coro = self.reader.readuntil(self.separator)
                 data = await asyncio.wait_for(coro, timeout=timeout)
+
             except asyncio.TimeoutError as e:
                 log.error(f"Timeout of {timeout}s exceeded for socket read, returning")
                 self._connected = False
                 self.encrypted = False
-                self.channels.remove_all_channels()
+                # self.channels.remove_all_channels()
                 break
             except asyncio.IncompleteReadError as e:
                 # log.debug("EOF reached, socket closed")
                 self._connected = False
                 self.encrypted = False
-                self.channels.remove_all_channels()
+                # self.channels.remove_all_channels()
                 break
             except ConnectionResetError as e:
                 self._connected = False
                 self.encrypted = False
-                self.channels.remove_all_channels()
+                # self.channels.remove_all_channels()
                 break
             except ssl.SSLError as e:
                 log.error(e)
                 self._connected = False
                 self.encrypted = False
-                self.channels.remove_all_channels()
+                # self.channels.remove_all_channels()
                 break
             except asyncio.LimitOverrunError as e:
                 data = []
@@ -786,7 +918,7 @@ class EncryptedSocketClientTransport(ClientTransport):
 
                     data.append(current)
 
-                count = re.findall(b"\<\?!!\?\\>", data[-1])
+                count = re.findall(b"\\<\\?!!\\?\\>", data[-1])
 
                 # split messages
                 if len(count) > 1:
@@ -804,7 +936,7 @@ class EncryptedSocketClientTransport(ClientTransport):
                 print(repr(e))
                 self._connected = False
                 self.encrypted = False
-                self.channels.remove_all_channels()
+                # self.channels.remove_all_channels()
                 break
 
             message = data.rstrip(self.separator)
@@ -813,30 +945,33 @@ class EncryptedSocketClientTransport(ClientTransport):
             extra_messages = []
 
             for message in all_messages:
-                # ToDo: catch
                 try:
                     message = SerializedMessage(message).deserialize()
                 except Exception as e:
                     print("can't deserialize in for")
                     print(repr(e))
                     continue
-                log.debug(f"Received : {type(message).__name__}")
+
+                log.info(f"Received : {type(message).__name__}")
 
                 if self.encrypted:
-                    message = message.decrypt(self.aeskey)
+                    message = self.decrypt(message)
 
                 match message:
                     case PtyMessage():
-                        our_socket = self.writer.get_extra_info("sockname")
-                        await self.on_pty_data_callback(our_socket, message.data)
+                        # our_socket = self.writer.get_extra_info("sockname")
+                        await self.on_pty_data_callback(self.sockname, message.data)
 
                     case RpcReplyMessage():
                         chan = self.channels.get_channel_by_id(message.chan_id)
 
                         if chan:
-                            await chan.q.put(message)
+                            chan.q.put_nowait(message)
+
                         else:
-                            raise ChannelError(f"Unknown channel id: {message.chan_id}")
+                            log.warning(
+                                f"Dropping message {message} with Unknown channel id: {message.chan_id}"
+                            )
 
                     case ChallengeMessage() | AuthReplyMessage():
                         await self.authentication_message_handler(message)
@@ -853,18 +988,20 @@ class EncryptedSocketClientTransport(ClientTransport):
                         await self.encryption_message_handler(message)
 
                     case PtyClosedMessage():
-                        our_socket = self.writer.get_extra_info("sockname")
-                        await self.on_pty_closed_callback(our_socket)
+                        # our_socket = self.writer.get_extra_info("sockname")
+                        await self.on_pty_closed_callback(self.sockname)
 
                     case _:
                         log.error(f"Unknown message: {message}")
+
+                # log.info(f"Time to loop for {peername}: {time.monotonic() - start}")
 
         log.debug("Finished read socket loop")
 
     async def send_pty_message(self, data):
         msg = PtyMessage(data)
         if self.encrypted:
-            msg = msg.encrypt(self.aeskey)
+            msg = msg.encrypt(self.aes_keys[-1])
 
         self.writer.write(msg.serialize() + self.separator)
         await self.writer.drain()
@@ -906,7 +1043,7 @@ class EncryptedSocketClientTransport(ClientTransport):
                         msg = FileEntryStreamMessage(data, remote_path, eof)
 
                         if self.encrypted:
-                            msg = msg.encrypt(self.aeskey)
+                            msg = msg.encrypt(self.aes_keys[-1])
 
                         self.writer.write(msg.serialize() + self.separator)
                         await self.writer.drain()
@@ -917,13 +1054,10 @@ class EncryptedSocketClientTransport(ClientTransport):
     async def send_pty_resize_message(self, rows, cols):
         msg = PtyResizeMessage(rows, cols)
         if self.encrypted:
-            msg = msg.encrypt(self.aeskey)
+            msg = msg.encrypt(self.aes_keys[-1])
 
         self.writer.write(msg.serialize() + self.separator)
         await self.writer.drain()
-
-    # ToDo: this interface is a bit murky. Called both internally and externally
-    # Need to split these so this is only called externally
 
     async def send(self, data: bytes):
         self.writer.write(data + self.separator)
@@ -933,30 +1067,41 @@ class EncryptedSocketClientTransport(ClientTransport):
         self,
         message: Message | bytes,
         expect_reply: bool = True,
+        timeout: int = 45,
+        channel: int | None = None,
     ) -> Message | None:
         """Writes data on the socket, this is the main entrypoint"""
+
+        chan = self.channels.get_channel(chan_id=channel)
+        # since we are reusing channels, there is a small chance there could be
+        # a stale message in there. Just dump them. Ideally, would just use unique
+        # channel id's - however this adds overhead as we have to send these over the socket
+        # If it becomes a problem, will move sequencial channel ids
+        if not chan:
+            log.warning(f"No free channels... probably timed out... returning")
+            return
+
         # from upper RPC layer
         if isinstance(message, bytes):
             # should always be encrypted here?
-            chan = self.channels.get_channel()
+
+            # print(f"Received channel: {chan.id}")
             message = RpcRequestMessage(chan.id, message)
             # print("Payload size", bytes_to_human(len(message.payload)))
         if self.encrypted:
             log.debug(f"Sending encrypted message: {message}")
-            message = message.encrypt(self.aeskey)
+            message = message.encrypt(self.aes_keys[-1])
         else:
             log.debug(f"Sending message in the clear: {message}")
 
+        # catch
         await self.send(message.serialize())
 
-        if expect_reply:
-            try:
-                res = await asyncio.wait_for(chan.q.get(), timeout=45)
-            except asyncio.TimeoutError:
-                log.error(f"Timed out waiting for response to message: {message}")
-                return
-
+        if not expect_reply:
             self.channels.release_channel(chan.id)
+        else:
+            # upper layer catches this
+            res = await asyncio.wait_for(chan.q.get(), timeout=timeout)
 
             if isinstance(res, RpcReplyMessage):
                 res = res.payload
@@ -964,6 +1109,9 @@ class EncryptedSocketClientTransport(ClientTransport):
                 ...
             else:
                 log.error(f"Waiting for RPC message but received something else: {res}")
+
+            # log.info(f"Releasing channel id: {chan.id}")
+            await self.channels.release_channel(chan.id)
             return res
 
     def reset_state(self):
@@ -973,24 +1121,23 @@ class EncryptedSocketClientTransport(ClientTransport):
         self.proxy_authenticated = False
         self.auth_required = True
         self.proxy_auth_required = True
+        self.sockname = "Not connected"
+        self.peername = "Not connected"
 
         if self.read_socket_task:
             self.read_socket_task.cancel()
 
-    async def disconnect(self):
+    async def disconnect(self, chan_id: int | None = None):
         # this_frame = inspect.currentframe()
         # caller_frame = inspect.getouterframes(this_frame, 2)
         # print("caller name:", caller_frame[1][3])
         # print(inspect.currentframe().f_back.f_code.co_name)
-        sockname = "Not connected"
-        peername = "Not connected"
-        if self.writer:
-            sockname = self.writer.get_extra_info("sockname")
-            peername = self.writer.get_extra_info("peername")
+
         log.info(
-            f"Disconnect called for socket: {sockname} <-> {peername}. Total channels before: {self.channels}"
+            f"Disconnect called for socket: {self.sockname} <-> {self.peername}. Total channels before: {self.channels}"
         )
-        self.channels.remove_channel()
+
+        self.channels.remove_channel(chan_id)
         # self.channels -= 1
         # this shouldn't happen but yeah
         # self.channels = max(0, self.channels)
@@ -1000,17 +1147,20 @@ class EncryptedSocketClientTransport(ClientTransport):
 
         self._disconnecting = True
 
-        log.info("No more channels... closing socket")
+        # log.info("No more channels... closing socket")
         await self._close_socket()
 
     async def _close_socket(self):
         """Lets other end know we're closed, then closes socket"""
         if self.writer and not self.writer.is_closing():
-            log.info("Writing EOF on socket")
+            if self.rekey_manager:
+                self.rekey_manager.cancel()
+            # log.info("Writing EOF on socket")
             try:
                 self.writer.write_eof()
             except NotImplementedError:
-                log.warn("Can't write EOF on SSL socket")
+                pass
+                # log.warn("Can't write EOF on SSL socket")
             except OSError:
                 # socket is not connected
                 pass
