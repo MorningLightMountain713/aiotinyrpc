@@ -28,6 +28,7 @@ class MessageTypes(Enum):
     ProxyResponseMessage = 17
     FileEntryStreamMessage = 18
     LivelinessMessage = 19
+    AesRekeyMessage = 20
 
 
 from Cryptodome.Cipher import AES

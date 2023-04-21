@@ -566,7 +566,6 @@ class EncryptedSocketClientTransport(ClientTransport):
         self.rekeying = value
 
     def decrypt(self, msg: EncryptedMessage) -> Message:
-        print("decrypto")
         try:
             decrypted = msg.decrypt(self.aes_keys[0])
         except ValueError as e:  # wrong key or no keys
@@ -574,11 +573,7 @@ class EncryptedSocketClientTransport(ClientTransport):
                 decrypted = msg.decrypt(self.aes_keys[1])
             else:
                 raise e from None
-        except Exception as e:
-            print(repr(e))
-            exit(0)
 
-        print(decrypted)
         return decrypted
 
     async def encryption_message_handler(self, msg):
