@@ -119,7 +119,7 @@ class EncryptablePeerGroup:
             print("destroy all peers exception")
             print(repr(e))
 
-    async def start_peer_timeout(self, id):
+    def start_peer_timeout(self, id):
         peer = self.get_peer(id)
         timeout = 10
 
@@ -285,7 +285,7 @@ class EncryptedSocketServerTransport(ServerTransport):
                 msg = msg.encrypt(peer.key_data.aes_key)
 
             await peer.send(msg.serialize())
-            await self.peers.start_peer_timeout(peer.id)
+            self.peers.start_peer_timeout(peer.id)
         except Exception as e:
             print(repr(e))
             exit("bye")
@@ -299,7 +299,7 @@ class EncryptedSocketServerTransport(ServerTransport):
             msg = self.auth_provider.generate_challenge(msg)
 
         await peer.send(msg.serialize())
-        await self.peers.start_peer_timeout(peer.id)
+        self.peers.start_peer_timeout(peer.id)
 
     async def valid_source_ip(self, peer_ip) -> bool:
         """Called when connection is established to verify correct source IP"""
@@ -392,12 +392,13 @@ class EncryptedSocketServerTransport(ServerTransport):
 
             peer.key_data.burn_rsa_keys()
 
-            # Send a test encryption request, always include random data
-            peer.random = get_random_bytes(16).hex()
-            test_msg = TestMessage(peer.random)
-            encrypted_test_msg = test_msg.encrypt(aes_key)
+            if not peer.encrypted:
+                # Send a test encryption request, always include random data
+                peer.random = get_random_bytes(16).hex()
+                test_msg = TestMessage(peer.random)
+                encrypted_test_msg = test_msg.encrypt(aes_key)
 
-            await peer.send(encrypted_test_msg.serialize())
+                await peer.send(encrypted_test_msg.serialize())
 
         if isinstance(msg, EncryptedMessage):
             response = msg.decrypt(peer.key_data.aes_key)

@@ -9,6 +9,7 @@ import inspect
 from dataclasses import dataclass, field
 from contextlib import asynccontextmanager
 from collections import deque
+import random
 
 import aiofiles
 from rich.progress import (
@@ -570,6 +571,7 @@ class EncryptedSocketClientTransport(ClientTransport):
             decrypted = msg.decrypt(self.aes_keys[-1])
         except ValueError as e:  # wrong key or no keys
             if self.rekeying:
+                print("decrypt during rekeying timer with old key")
                 decrypted = msg.decrypt(self.aes_keys[0])
             else:
                 raise e from None
@@ -690,6 +692,9 @@ class EncryptedSocketClientTransport(ClientTransport):
 
     async def send_rekey_every(self, commanded_delay: int):
         """Will send a rekey message to the agent every <delay> seconds"""
+        # spread out agaent rekeys over a second
+        await asyncio.sleep(random.random())
+
         delay = commanded_delay
         while True:
             await asyncio.sleep(delay)
