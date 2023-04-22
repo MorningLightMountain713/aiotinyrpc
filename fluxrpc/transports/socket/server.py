@@ -275,7 +275,7 @@ class EncryptedSocketServerTransport(ServerTransport):
         msg = RsaPublicKeyMessage(peer.key_data.rsa_public)
 
         if rekey:
-            msg.encrypt()
+            msg.encrypt(peer.key_data.aes_key)
 
         await peer.send(msg.serialize())
         await self.peers.start_peer_timeout(peer.id)
@@ -508,7 +508,8 @@ class EncryptedSocketServerTransport(ServerTransport):
 
         if peer.writer and not peer.writer.is_closing() and not peer.proxied:
             await self.begin_encryption(peer)
-        log.info("Handle client finished... waiting on read loop")
+
+        log.info("Client bootstrap complete... read loop has control")
 
     async def overrun_strategy(self, peer: EncryptablePeer, to_consume: int):
         log.info(f"LimitOverrun: Read {bytes_to_human(to_consume)} into buffer")

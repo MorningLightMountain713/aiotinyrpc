@@ -567,9 +567,11 @@ class EncryptedSocketClientTransport(ClientTransport):
 
     def decrypt(self, msg: EncryptedMessage) -> Message:
         try:
+            print(f"trying key: {self.aes_keys[0]}")
             decrypted = msg.decrypt(self.aes_keys[0])
         except ValueError as e:  # wrong key or no keys
             if self.rekeying:
+                print(f"Rekeying, trying key: {self.aes_keys[1]}")
                 decrypted = msg.decrypt(self.aes_keys[1])
             else:
                 raise e from None
@@ -578,6 +580,7 @@ class EncryptedSocketClientTransport(ClientTransport):
 
     async def encryption_message_handler(self, msg):
         # this is always received before encrypted message
+        print(f"Encrypted msg handler: {type(msg)}")
         if isinstance(msg, RsaPublicKeyMessage):
             rsa_public_key = msg.key.decode("utf-8")
 
@@ -586,10 +589,12 @@ class EncryptedSocketClientTransport(ClientTransport):
             try:
                 # this is a rekey event
                 if self.encrypted:
+                    print("Received new RSA public for rekey")
                     self.rekeying = True
                     self.loop.call_later(1, self.set_rekey, False)
 
                 self.aes_keys.append(new_aes_key)
+                print(self.aes_keys)
             except Exception as e:
                 print(repr(e))
                 exit(0)
@@ -617,7 +622,6 @@ class EncryptedSocketClientTransport(ClientTransport):
 
         if isinstance(msg, EncryptedMessage):
             decrypted_test_message = self.decrypt(msg)
-            print("again", decrypted_test_message)
 
             if not decrypted_test_message.text == "TestEncryptionMessage":
                 log.error("Malformed test aes message received... skipping")
@@ -683,10 +687,10 @@ class EncryptedSocketClientTransport(ClientTransport):
 
     async def send_rekey_every(self, commanded_delay: int):
         """Will send a rekey message to the agent every <delay> seconds"""
-        print("Starting RE-KEY")
         delay = commanded_delay
         while True:
             await asyncio.sleep(delay)
+            print("Starting RE-KEY")
             delay = commanded_delay
 
             start = time.monotonic()
@@ -951,6 +955,7 @@ class EncryptedSocketClientTransport(ClientTransport):
 
                 if self.encrypted:
                     message = self.decrypt(message)
+                    log.info(f"Decrypted Received : {type(message).__name__}")
 
                 match message:
                     case PtyMessage():
@@ -1123,10 +1128,10 @@ class EncryptedSocketClientTransport(ClientTransport):
             self.read_socket_task.cancel()
 
     async def disconnect(self, chan_id: int | None = None):
-        # this_frame = inspect.currentframe()
-        # caller_frame = inspect.getouterframes(this_frame, 2)
-        # print("caller name:", caller_frame[1][3])
-        # print(inspect.currentframe().f_back.f_code.co_name)
+        this_frame = inspect.currentframe()
+        caller_frame = inspect.getouterframes(this_frame, 2)
+        print("caller name:", caller_frame[1][3])
+        print("caller", inspect.currentframe().f_back.f_code.co_name)
 
         log.info(
             f"Disconnect called for socket: {self.sockname} <-> {self.peername}. Total channels before: {self.channels}"
