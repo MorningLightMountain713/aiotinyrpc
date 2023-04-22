@@ -65,9 +65,6 @@ from .symbols import (
     FORWARDING_TIMEOUT,
 )
 
-# How often we generate a Rekey message; Forces a full encryption interchange
-REKEY_TIMER = 60  # seconds
-
 
 def bytes_to_human(num, suffix="B"):
     for unit in ["", "K", "M", "G", "T", "P", "E", "Z"]:
@@ -300,6 +297,7 @@ class EncryptedSocketClientTransport(ClientTransport):
         ca: bytes = b"",
         on_pty_data_callback: Callable | None = None,
         on_pty_closed_callback: Callable | None = None,
+        rekey_timer: int = 1800,
     ):
         self._address = address
         self.auth_required = True
@@ -336,6 +334,7 @@ class EncryptedSocketClientTransport(ClientTransport):
         self.forwarding_event = asyncio.Event()
         self.authentication_event = asyncio.Event()
         self.challenge_complete_event = asyncio.Event()
+        self.rekey_timer = rekey_timer
 
         self.rekey_manager: asyncio.Task | None = None
         # rename this to channels
@@ -563,24 +562,27 @@ class EncryptedSocketClientTransport(ClientTransport):
         self.forwarding_event.set()
 
     def set_rekey(self, value: bool):
+        # print(f"Setting rekey: {value}")
         self.rekeying = value
 
     def decrypt(self, msg: EncryptedMessage) -> Message:
         try:
-            print(f"trying key: {self.aes_keys[0]}")
-            decrypted = msg.decrypt(self.aes_keys[0])
+            decrypted = msg.decrypt(self.aes_keys[-1])
         except ValueError as e:  # wrong key or no keys
             if self.rekeying:
-                print(f"Rekeying, trying key: {self.aes_keys[1]}")
-                decrypted = msg.decrypt(self.aes_keys[1])
+                decrypted = msg.decrypt(self.aes_keys[0])
             else:
                 raise e from None
+        except Exception as e:
+            print("blah123")
+            print(repr(e))
+            exit(0)
 
         return decrypted
 
     async def encryption_message_handler(self, msg):
         # this is always received before encrypted message
-        print(f"Encrypted msg handler: {type(msg)}")
+        # print(f"Encrypted msg handler: {type(msg)}")
         if isinstance(msg, RsaPublicKeyMessage):
             rsa_public_key = msg.key.decode("utf-8")
 
@@ -589,12 +591,10 @@ class EncryptedSocketClientTransport(ClientTransport):
             try:
                 # this is a rekey event
                 if self.encrypted:
-                    print("Received new RSA public for rekey")
                     self.rekeying = True
                     self.loop.call_later(1, self.set_rekey, False)
 
                 self.aes_keys.append(new_aes_key)
-                print(self.aes_keys)
             except Exception as e:
                 print(repr(e))
                 exit(0)
@@ -613,6 +613,9 @@ class EncryptedSocketClientTransport(ClientTransport):
             except Exception as e:
                 print(repr(e))
                 exit(0)
+
+            if self.encrypted:
+                session_key_message = session_key_message.encrypt(self.aes_keys[0])
 
             try:
                 await self.send(session_key_message.serialize())
@@ -690,16 +693,16 @@ class EncryptedSocketClientTransport(ClientTransport):
         delay = commanded_delay
         while True:
             await asyncio.sleep(delay)
-            print("Starting RE-KEY")
             delay = commanded_delay
 
             start = time.monotonic()
             msg = AesRekeyMessage(get_random_bytes(4))
-            msg.encrypt(self.aes_keys[-1])
+            msg = msg.encrypt(self.aes_keys[-1])
 
             await self.send(msg.serialize())
 
             delay = delay - (time.monotonic() - start)
+            log.info(f"Rekeying, then sleeping {delay}s")
 
     async def connect(self, exclusive: bool = False):
         # log.info(f"DEBUG: all tasks count: {len(asyncio.all_tasks())}")
@@ -824,7 +827,9 @@ class EncryptedSocketClientTransport(ClientTransport):
         self._connected = True
         self._connecting = False
 
-        self.rekey_manager = asyncio.create_task(self.send_rekey_every(REKEY_TIMER))
+        self.rekey_manager = asyncio.create_task(
+            self.send_rekey_every(self.rekey_timer)
+        )
 
         return channel
 
@@ -951,11 +956,11 @@ class EncryptedSocketClientTransport(ClientTransport):
                     print(repr(e))
                     continue
 
-                log.info(f"Received : {type(message).__name__}")
+                log.debug(f"Received : {type(message).__name__}")
 
                 if self.encrypted:
                     message = self.decrypt(message)
-                    log.info(f"Decrypted Received : {type(message).__name__}")
+                    log.debug(f"Decrypted Received : {type(message).__name__}")
 
                 match message:
                     case PtyMessage():
@@ -1128,10 +1133,10 @@ class EncryptedSocketClientTransport(ClientTransport):
             self.read_socket_task.cancel()
 
     async def disconnect(self, chan_id: int | None = None):
-        this_frame = inspect.currentframe()
-        caller_frame = inspect.getouterframes(this_frame, 2)
-        print("caller name:", caller_frame[1][3])
-        print("caller", inspect.currentframe().f_back.f_code.co_name)
+        # this_frame = inspect.currentframe()
+        # caller_frame = inspect.getouterframes(this_frame, 2)
+        # print("caller name:", caller_frame[1][3])
+        # print("caller", inspect.currentframe().f_back.f_code.co_name)
 
         log.info(
             f"Disconnect called for socket: {self.sockname} <-> {self.peername}. Total channels before: {self.channels}"

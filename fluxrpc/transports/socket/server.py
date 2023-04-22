@@ -258,27 +258,37 @@ class EncryptedSocketServerTransport(ServerTransport):
 
     def parse_session_key_message(self, key_pem: str, msg: SessionKeyMessage) -> str:
         """Used by Node to decrypt and return the AES Session key using the RSA Key"""
-        private_key = RSA.import_key(key_pem)
+        try:
+            private_key = RSA.import_key(key_pem)
 
-        enc_session_key = msg.rsa_encrypted_session_key
+            enc_session_key = msg.rsa_encrypted_session_key
 
-        cipher_rsa = PKCS1_OAEP.new(private_key)
-        session_key = cipher_rsa.decrypt(enc_session_key)
+            cipher_rsa = PKCS1_OAEP.new(private_key)
+            session_key = cipher_rsa.decrypt(enc_session_key)
 
-        enc_aes_key_message = SerializedMessage(msg.aes_key_message).deserialize()
+            enc_aes_key_message = SerializedMessage(msg.aes_key_message).deserialize()
 
-        aes_key_message = enc_aes_key_message.decrypt(session_key)
+            aes_key_message = enc_aes_key_message.decrypt(session_key)
+        except Exception as e:
+            print(repr(e))
+            print("trower")
+            exit(0)
+
         return aes_key_message.aes_key
 
     async def begin_encryption(self, peer: EncryptablePeer, rekey: bool = False):
         peer.key_data.generate()
         msg = RsaPublicKeyMessage(peer.key_data.rsa_public)
 
-        if rekey:
-            msg.encrypt(peer.key_data.aes_key)
+        try:
+            if rekey:
+                msg = msg.encrypt(peer.key_data.aes_key)
 
-        await peer.send(msg.serialize())
-        await self.peers.start_peer_timeout(peer.id)
+            await peer.send(msg.serialize())
+            await self.peers.start_peer_timeout(peer.id)
+        except Exception as e:
+            print(repr(e))
+            exit("bye")
 
     async def send_challenge_message(self, peer: EncryptablePeer) -> bool:
         source = peer.writer.get_extra_info("sockname")
@@ -336,9 +346,15 @@ class EncryptedSocketServerTransport(ServerTransport):
         reply = LivelinessMessage(msg.text[::-1])
         await peer.send(reply.serialize())
 
-    async def handle_aes_rekey_message(self, msg: AesRekeyMessage):
+    async def handle_aes_rekey_message(
+        self, peer: EncryptablePeer, msg: AesRekeyMessage
+    ):
         # still figuring what to, is there any content in this message?
-        self.begin_encryption(rekey=True)
+        try:
+            await self.begin_encryption(peer, rekey=True)
+        except Exception as e:
+            print(repr(e))
+            exit("peace")
 
     async def handle_forwarding_message(self, peer: EncryptablePeer, msg: ProxyMessage):
         resp = ProxyResponseMessage(False)
@@ -366,13 +382,13 @@ class EncryptedSocketServerTransport(ServerTransport):
     async def handle_encryption_message(
         self, peer: EncryptablePeer, msg: SessionKeyMessage | EncryptedMessage
     ):
-        peer.timer.cancel()
+        if peer.timer:
+            peer.timer.cancel()
 
         if isinstance(msg, SessionKeyMessage):
             aes_key = self.parse_session_key_message(peer.key_data.rsa_private, msg)
 
             peer.key_data.aes_key = aes_key
-            print("aeskey", aes_key)
 
             peer.key_data.burn_rsa_keys()
 
@@ -382,7 +398,6 @@ class EncryptedSocketServerTransport(ServerTransport):
             encrypted_test_msg = test_msg.encrypt(aes_key)
 
             await peer.send(encrypted_test_msg.serialize())
-            print("message sent!")
 
         if isinstance(msg, EncryptedMessage):
             response = msg.decrypt(peer.key_data.aes_key)
@@ -633,14 +648,15 @@ class EncryptedSocketServerTransport(ServerTransport):
                 print("end", message[-100:])
                 continue
 
-            log.info(f"Received : {type(message).__name__}")
+            log.debug(f"Received : {type(message).__name__}")
 
             if peer.encrypted:
                 message = message.decrypt(peer.key_data.aes_key)
+                log.debug(f"Received decrypted: {type(message).__name__}")
 
             match message:
                 case AesRekeyMessage():
-                    await peer.handle_aes_rekey_message()
+                    await self.handle_aes_rekey_message(peer, message)
 
                 case PtyMessage() | PtyResizeMessage():
                     peer.handle_pty_message(message)
