@@ -277,7 +277,8 @@ class EncryptedSocketServerTransport(ServerTransport):
         return aes_key_message.aes_key
 
     async def begin_encryption(self, peer: EncryptablePeer, rekey: bool = False):
-        peer.key_data.generate()
+        # this can take 0.5 seconds to generate (on macbook), have to run in thread to avoid blocking loop
+        await asyncio.to_thread(peer.key_data.generate)
         msg = RsaPublicKeyMessage(peer.key_data.rsa_public)
 
         try:
@@ -344,6 +345,8 @@ class EncryptedSocketServerTransport(ServerTransport):
         self, peer: EncryptablePeer, msg: LivelinessMessage
     ):
         reply = LivelinessMessage(msg.text[::-1])
+        reply = reply.encrypt(peer.key_data.aes_key)
+
         await peer.send(reply.serialize())
 
     async def handle_aes_rekey_message(
@@ -652,7 +655,11 @@ class EncryptedSocketServerTransport(ServerTransport):
             log.debug(f"Received : {type(message).__name__}")
 
             if peer.encrypted:
-                message = message.decrypt(peer.key_data.aes_key)
+                try:
+                    message = message.decrypt(peer.key_data.aes_key)
+                except Exception as e:
+                    print(repr(e))
+                    print("can't decrypt")
                 log.debug(f"Received decrypted: {type(message).__name__}")
 
             match message:
@@ -728,7 +735,7 @@ class EncryptedSocketServerTransport(ServerTransport):
 
     async def send_reply(self, context: tuple, channel: int, data: bytes):
         msg = RpcReplyMessage(channel, data)
-        peer = self.peers.get_peer(context)
+        peer: EncryptablePeer = self.peers.get_peer(context)
 
         if not peer:
             # socket has been terminated / removed

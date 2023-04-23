@@ -240,6 +240,5 @@ class RPCProxy(object):
         )
         # above was pass by value
         self.one_way = False
-        self.timeout = 45
 
         return proxy_func

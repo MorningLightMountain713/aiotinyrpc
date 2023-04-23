@@ -169,16 +169,20 @@ class ChannelManager:
 
         return free_id
 
-    def add_channel(self, exclusive: bool = False):
+    def add_channel(self, exclusive: bool = False) -> int:
         id = self.get_next_free_id()
         # id = len(self.channels)
         self.channels.append(Channel(id, exclusive))
+
+        return id
 
     def remove_all_channels(self):
         self.channels = []
 
     def remove_channel(self, chan_id: int | None):
         """Remove the first non used channel or an exclusive channel if chan_id used"""
+        print(self.channels)
+        print("chan_id", chan_id)
         if chan_id:
             chan = self.get_channel_by_id(chan_id)
             if chan:
@@ -189,6 +193,7 @@ class ChannelManager:
             if not channel.in_use and not channel.exclusive:
                 self.channels.remove(channel)
                 break
+        print(self.channels)
 
 
 @dataclass
@@ -359,6 +364,7 @@ class EncryptedSocketClientTransport(ClientTransport):
         self.session = Session(self)
         self.sockname = "Not connected"
         self.peername = "Not connected"
+        self.in_flight_messages = set()
 
         # ToDo: maybe have a alway connected flag and if set, we connect here
         # self.connect()
@@ -563,23 +569,27 @@ class EncryptedSocketClientTransport(ClientTransport):
         self.forwarding_event.set()
 
     def set_rekey(self, value: bool):
-        # print(f"Setting rekey: {value}")
+        log.info(f"{self.peername}: Disabling rekey window")
         self.rekeying = value
+
+        if not self.rekeying:
+            self.aes_keys.popleft()
 
     def decrypt(self, msg: EncryptedMessage) -> Message:
         try:
             decrypted = msg.decrypt(self.aes_keys[-1])
         except ValueError as e:  # wrong key or no keys
             if self.rekeying:
-                print("decrypt during rekeying timer with old key")
+                # print(f"decrypt during rekeying timer with old key: {self.peername}")
                 decrypted = msg.decrypt(self.aes_keys[0])
+                # print(decrypted)
             else:
+                print("Valueerror outside rekey")
                 raise e from None
         except Exception as e:
             print("blah123")
             print(repr(e))
             exit(0)
-
         return decrypted
 
     async def encryption_message_handler(self, msg):
@@ -589,17 +599,13 @@ class EncryptedSocketClientTransport(ClientTransport):
             rsa_public_key = msg.key.decode("utf-8")
 
             new_aes_key = get_random_bytes(16).hex().encode("utf-8")
+            # log.info(f"{self.peername} RSAPublic key received... setting new aes_key")
+            self.aes_keys.append(new_aes_key)
 
-            try:
-                # this is a rekey event
-                if self.encrypted:
-                    self.rekeying = True
-                    self.loop.call_later(1, self.set_rekey, False)
-
-                self.aes_keys.append(new_aes_key)
-            except Exception as e:
-                print(repr(e))
-                exit(0)
+            # this is a rekey event
+            if self.encrypted:
+                self.rekeying = True
+                self.loop.call_later(1, self.set_rekey, False)
 
             try:
                 session_key_message = self.session_key_message(
@@ -690,33 +696,31 @@ class EncryptedSocketClientTransport(ClientTransport):
         finally:
             await self.disconnect()
 
-    async def send_rekey_every(self, commanded_delay: int):
+    async def send_rekey_every(self, delay: int):
         """Will send a rekey message to the agent every <delay> seconds"""
         # spread out agaent rekeys over a second
         await asyncio.sleep(random.random())
 
-        delay = commanded_delay
         while True:
             await asyncio.sleep(delay)
-            delay = commanded_delay
 
-            start = time.monotonic()
             msg = AesRekeyMessage(get_random_bytes(4))
             msg = msg.encrypt(self.aes_keys[-1])
 
             await self.send(msg.serialize())
 
-            delay = delay - (time.monotonic() - start)
-            log.info(f"Rekeying, then sleeping {delay}s")
+            log.info(
+                f"{self.peername} Rekey message sent... sleeping {round(delay, 2)}s"
+            )
 
-    async def connect(self, exclusive: bool = False):
+    async def connect(self, exclusive: bool = False) -> int | None:
         # log.info(f"DEBUG: all tasks count: {len(asyncio.all_tasks())}")
-        channel = None
+        chan_id = None
 
         # start fresh - not 100% on this
         self.failed_on = ""
 
-        # log.info(f"Transport id: {id(self)} Connecting...")
+        log.info(f"Transport id: {id(self)} Connecting...")
         # if self._connecting:
         #     log.info("Connecting... adding channel")
         #     # isn't this wrong???
@@ -733,10 +737,10 @@ class EncryptedSocketClientTransport(ClientTransport):
 
         if self.channels:
             # self.channels += 1
-            channel = self.channels.add_channel(exclusive)
+            chan_id = self.channels.add_channel(exclusive)
 
-            # log.info(f"Adding new channel. Total: {self.channels}")
-            return channel
+            log.info(f"Adding new channel. Total: {self.channels}")
+            return chan_id
 
         self._connecting = True
 
@@ -749,7 +753,7 @@ class EncryptedSocketClientTransport(ClientTransport):
             return
 
         # self.channels += 1
-        channel = self.channels.add_channel(exclusive)
+        chan_id = self.channels.add_channel(exclusive)
 
         self.read_socket_task = asyncio.create_task(self.read_socket_loop())
 
@@ -828,7 +832,7 @@ class EncryptedSocketClientTransport(ClientTransport):
         self.encrypted_event.clear()
 
         # self.channels += 1
-        log.debug(f"Connection encrypted Total channels: {self.channels}")
+        log.info(f"Connection encrypted Total channels: {self.channels}")
         self._connected = True
         self._connecting = False
 
@@ -836,7 +840,7 @@ class EncryptedSocketClientTransport(ClientTransport):
             self.send_rekey_every(self.rekey_timer)
         )
 
-        return channel
+        return chan_id
 
     async def _connect(self):
         """Connects to socket server. Tries a max of 3 times"""
@@ -953,60 +957,68 @@ class EncryptedSocketClientTransport(ClientTransport):
             all_messages = [message, *extra_messages]
             extra_messages = []
 
-            for message in all_messages:
-                try:
-                    message = SerializedMessage(message).deserialize()
-                except Exception as e:
-                    print("can't deserialize in for")
-                    print(repr(e))
-                    continue
+            t = asyncio.create_task(
+                self.process_messages(all_messages), name=f"process_messages"
+            )
 
-                log.debug(f"Received : {type(message).__name__}")
-
-                if self.encrypted:
-                    message = self.decrypt(message)
-                    log.debug(f"Decrypted Received : {type(message).__name__}")
-
-                match message:
-                    case PtyMessage():
-                        # our_socket = self.writer.get_extra_info("sockname")
-                        await self.on_pty_data_callback(self.sockname, message.data)
-
-                    case RpcReplyMessage():
-                        chan = self.channels.get_channel_by_id(message.chan_id)
-
-                        if chan:
-                            chan.q.put_nowait(message)
-
-                        else:
-                            log.warning(
-                                f"Dropping message {message} with Unknown channel id: {message.chan_id}"
-                            )
-
-                    case ChallengeMessage() | AuthReplyMessage():
-                        await self.authentication_message_handler(message)
-
-                    case ProxyResponseMessage():
-                        asyncio.create_task(self.forwarding_message_handler(message))
-
-                    case RsaPublicKeyMessage() | TestMessage():
-                        await self.encryption_message_handler(message)
-
-                    # This is our test message as we're not encrypted yet
-                    # it could be part of the handler above but more clear here
-                    case EncryptedMessage():
-                        await self.encryption_message_handler(message)
-
-                    case PtyClosedMessage():
-                        # our_socket = self.writer.get_extra_info("sockname")
-                        await self.on_pty_closed_callback(self.sockname)
-
-                    case _:
-                        log.error(f"Unknown message: {message}")
-
-                # log.info(f"Time to loop for {peername}: {time.monotonic() - start}")
+            self.in_flight_messages.add(t)
 
         log.debug("Finished read socket loop")
+
+    async def process_messages(self, messages: list):
+        for message in messages:
+            try:
+                message = SerializedMessage(message).deserialize()
+            except Exception as e:
+                print("can't deserialize in for")
+                print(repr(e))
+                continue
+
+            log.debug(f"Received : {type(message).__name__}")
+
+            if self.encrypted:
+                message = self.decrypt(message)
+                log.debug(f"Decrypted Received : {type(message).__name__}")
+
+            match message:
+                case PtyMessage():
+                    # our_socket = self.writer.get_extra_info("sockname")
+                    await self.on_pty_data_callback(self.sockname, message.data)
+
+                case RpcReplyMessage():
+                    chan = self.channels.get_channel_by_id(message.chan_id)
+
+                    if chan:
+                        chan.q.put_nowait(message)
+
+                    else:
+                        log.warning(
+                            f"Dropping message {message} with Unknown channel id: {message.chan_id}"
+                        )
+
+                case ChallengeMessage() | AuthReplyMessage():
+                    await self.authentication_message_handler(message)
+
+                case ProxyResponseMessage():
+                    asyncio.create_task(self.forwarding_message_handler(message))
+
+                case RsaPublicKeyMessage() | TestMessage():
+                    await self.encryption_message_handler(message)
+
+                # This is our test message as we're not encrypted yet
+                # it could be part of the handler above but more clear here
+                case EncryptedMessage():
+                    await self.encryption_message_handler(message)
+
+                case PtyClosedMessage():
+                    # our_socket = self.writer.get_extra_info("sockname")
+                    await self.on_pty_closed_callback(self.sockname)
+
+                case _:
+                    log.error(f"Unknown message: {message}")
+
+        task = asyncio.current_task()
+        self.in_flight_messages.remove(task)
 
     async def send_pty_message(self, data):
         msg = PtyMessage(data)
@@ -1098,6 +1110,7 @@ class EncryptedSocketClientTransport(ClientTransport):
             # print(f"Received channel: {chan.id}")
             message = RpcRequestMessage(chan.id, message)
             # print("Payload size", bytes_to_human(len(message.payload)))
+
         if self.encrypted:
             log.debug(f"Sending encrypted message: {message}")
             message = message.encrypt(self.aes_keys[-1])
@@ -1151,6 +1164,8 @@ class EncryptedSocketClientTransport(ClientTransport):
         # self.channels -= 1
         # this shouldn't happen but yeah
         # self.channels = max(0, self.channels)
+
+        print(f"Channels now: {self.channels}")
 
         if self.channels:
             return
