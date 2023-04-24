@@ -456,16 +456,20 @@ class EncryptedSocketClientTransport(ClientTransport):
     async def writeable(self) -> bool:
         """Writes on the socket and checks it's all good"""
         if not self.writer:
+            print("no writer")
             return False
 
+        msg = LivelinessMessage()
+
         try:
-            res = await asyncio.wait_for(
-                self.send_message(LivelinessMessage()), timeout=3
-            )
-        except (ConnectionResetError, BrokenPipeError, asyncio.TimeoutError):
+            res = await asyncio.wait_for(self.send_message(msg), timeout=3)
+            print(f"writable res: {res}")
+        except (ConnectionResetError, BrokenPipeError, asyncio.TimeoutError) as e:
+            log.error(repr(e))
             return False
 
         if not isinstance(res, LivelinessMessage):
+            log.error("NotLiveliness message")
             return False
 
         return True if res.text == "ohcE" else False
@@ -996,6 +1000,9 @@ class EncryptedSocketClientTransport(ClientTransport):
                             f"Dropping message {message} with Unknown channel id: {message.chan_id}"
                         )
 
+                case LivelinessMessage():
+                    await self.liveliness_message_handler(message)
+
                 case ChallengeMessage() | AuthReplyMessage():
                     await self.authentication_message_handler(message)
 
@@ -1100,16 +1107,16 @@ class EncryptedSocketClientTransport(ClientTransport):
         # channel id's - however this adds overhead as we have to send these over the socket
         # If it becomes a problem, will move sequencial channel ids
         if not chan:
-            log.warning(f"No free channels... probably timed out... returning")
+            log.warning(f"No free channels... Socket down?")
             return
 
         # from upper RPC layer
-        if isinstance(message, bytes):
-            # should always be encrypted here?
+        match message:
+            case bytes():
+                message = RpcRequestMessage(chan.id, message)
 
-            # print(f"Received channel: {chan.id}")
-            message = RpcRequestMessage(chan.id, message)
-            # print("Payload size", bytes_to_human(len(message.payload)))
+            case LivelinessMessage():
+                message.chan_id = chan.id
 
         if self.encrypted:
             log.debug(f"Sending encrypted message: {message}")
@@ -1129,7 +1136,7 @@ class EncryptedSocketClientTransport(ClientTransport):
             if isinstance(res, RpcReplyMessage):
                 res = res.payload
             elif isinstance(res, LivelinessMessage):
-                ...
+                pass  # keep raw result for ensure_connected method
             else:
                 log.error(f"Waiting for RPC message but received something else: {res}")
 
@@ -1150,17 +1157,20 @@ class EncryptedSocketClientTransport(ClientTransport):
         if self.read_socket_task:
             self.read_socket_task.cancel()
 
-    async def disconnect(self, chan_id: int | None = None):
+    async def disconnect(self, chan_id: int | None = None, force: bool = False):
         # this_frame = inspect.currentframe()
         # caller_frame = inspect.getouterframes(this_frame, 2)
         # print("caller name:", caller_frame[1][3])
         # print("caller", inspect.currentframe().f_back.f_code.co_name)
 
         log.info(
-            f"Disconnect called for socket: {self.sockname} <-> {self.peername}. Total channels before: {self.channels}"
+            f"Disconnect: {self.sockname} <-> {self.peername}. Total channels before: {self.channels} Force: {force}"
         )
 
-        self.channels.remove_channel(chan_id)
+        if force:
+            self.channels.remove_all_channels()
+        else:
+            self.channels.remove_channel(chan_id)
         # self.channels -= 1
         # this shouldn't happen but yeah
         # self.channels = max(0, self.channels)

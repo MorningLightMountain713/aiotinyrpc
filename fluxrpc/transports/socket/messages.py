@@ -193,6 +193,7 @@ class FileEntryStreamMessage(Message):
 
 @dataclass
 class LivelinessMessage(Message):
+    chan_id: int
     text: str = "Echo"
 
 

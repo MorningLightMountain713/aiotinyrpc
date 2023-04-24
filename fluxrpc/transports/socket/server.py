@@ -344,7 +344,7 @@ class EncryptedSocketServerTransport(ServerTransport):
     async def handle_liveliness_message(
         self, peer: EncryptablePeer, msg: LivelinessMessage
     ):
-        reply = LivelinessMessage(msg.text[::-1])
+        reply = LivelinessMessage(msg.chan_id, msg.text[::-1])
         reply = reply.encrypt(peer.key_data.aes_key)
 
         await peer.send(reply.serialize())
