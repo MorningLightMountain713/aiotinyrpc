@@ -63,7 +63,7 @@ class Message:
         """Take a bytes stream and AES key and encrypt it"""
         cipher = AES.new(key, AES.MODE_EAX)
         ciphertext, tag = cipher.encrypt_and_digest(self.serialize())
-        return EncryptedMessage(cipher.nonce.hex(), tag.hex(), ciphertext.hex())
+        return EncryptedMessage(cipher.nonce, tag, ciphertext)
 
     def as_dict(self):
         return self.__dict__
@@ -147,19 +147,18 @@ class RsaPublicKeyMessage(Message):
 
 @dataclass
 class EncryptedMessage(Message):
-    nonce: str
-    tag: str
-    ciphertext: str
+    nonce: bytes
+    tag: bytes
+    ciphertext: bytes
 
     def decrypt(self, aes_key: bytes):
-        # store these up from so we don't have to do it every message
-        nonce = bytes.fromhex(self.nonce)
-        tag = bytes.fromhex(self.tag)
-        ciphertext = bytes.fromhex(self.ciphertext)
+        # nonce = bytes.fromhex(self.nonce)
+        # tag = bytes.fromhex(self.tag)
+        # ciphertext = bytes.fromhex(self.ciphertext)
 
         # this can raise ValueError
-        cipher = AES.new(aes_key, AES.MODE_EAX, nonce)
-        self.msg = cipher.decrypt_and_verify(ciphertext, tag)
+        cipher = AES.new(aes_key, AES.MODE_EAX, self.nonce)
+        self.msg = cipher.decrypt_and_verify(self.ciphertext, self.tag)
 
         return self.deserialize()
 
@@ -193,7 +192,7 @@ class FileEntryStreamMessage(Message):
 
 @dataclass
 class LivelinessMessage(Message):
-    chan_id: int
+    chan_id: int | None = None
     text: str = "Echo"
 
 

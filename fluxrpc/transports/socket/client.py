@@ -181,8 +181,6 @@ class ChannelManager:
 
     def remove_channel(self, chan_id: int | None):
         """Remove the first non used channel or an exclusive channel if chan_id used"""
-        print(self.channels)
-        print("chan_id", chan_id)
         if chan_id:
             chan = self.get_channel_by_id(chan_id)
             if chan:
@@ -193,7 +191,6 @@ class ChannelManager:
             if not channel.in_use and not channel.exclusive:
                 self.channels.remove(channel)
                 break
-        print(self.channels)
 
 
 @dataclass
@@ -220,12 +217,12 @@ class Session:
     started: bool = False
     signing_address: str = ""
 
-    async def __aenter__(self):
-        self.start()
-        return self
+    # async def __aenter__(self):
+    #     self.start()
+    #     return self
 
-    async def __aexit__(self, exc_type, exc_value, traceback):
-        self.end()
+    # async def __aexit__(self, exc_type, exc_value, traceback):
+    #     self.end()
 
     async def start(self, connect=False):
         if not self.started:
@@ -241,7 +238,7 @@ class Session:
     async def connect(self, signing_key: str = ""):
         self.connection_attempted = True
 
-        if signing_key:
+        if not self.transport.auth_provider and signing_key:
             auth_provider = SignatureAuthProvider(key=signing_key)
             self.transport.auth_provider = auth_provider
 
@@ -321,7 +318,7 @@ class EncryptedSocketClientTransport(ClientTransport):
         self.authenticated = False
         self.proxy_authenticated = False
         self.separator = b"<?!!?>"
-        self.messages = asyncio.Queue()
+        # self.messages = asyncio.Queue()
         self.loop = asyncio.get_event_loop()
         self.reader, self.writer = None, None
         self.auth_provider = auth_provider
@@ -413,6 +410,7 @@ class EncryptedSocketClientTransport(ClientTransport):
     @staticmethod
     def session_key_message(key_pem: str, aes_key: str) -> SessionKeyMessage:
         """Generate and encrypt AES session key with RSA public key"""
+        # this has to be blocking as fuck
         key = RSA.import_key(key_pem)
         session_key = get_random_bytes(16)
         # Encrypt the session key with the public RSA key
@@ -453,7 +451,7 @@ class EncryptedSocketClientTransport(ClientTransport):
         reader._transport = new_transport
         writer._transport = new_transport
 
-    async def writeable(self) -> bool:
+    async def writeable(self, chan_id: int | None = None) -> bool:
         """Writes on the socket and checks it's all good"""
         if not self.writer:
             print("no writer")
@@ -462,8 +460,9 @@ class EncryptedSocketClientTransport(ClientTransport):
         msg = LivelinessMessage()
 
         try:
-            res = await asyncio.wait_for(self.send_message(msg), timeout=3)
-            print(f"writable res: {res}")
+            res = await asyncio.wait_for(
+                self.send_message(msg, channel=chan_id), timeout=3
+            )
         except (ConnectionResetError, BrokenPipeError, asyncio.TimeoutError) as e:
             log.error(repr(e))
             return False
@@ -573,7 +572,7 @@ class EncryptedSocketClientTransport(ClientTransport):
         self.forwarding_event.set()
 
     def set_rekey(self, value: bool):
-        log.info(f"{self.peername}: Disabling rekey window")
+        # log.info(f"{self.peername}: Disabling rekey window")
         self.rekeying = value
 
         if not self.rekeying:
@@ -672,21 +671,34 @@ class EncryptedSocketClientTransport(ClientTransport):
 
         await self.send(msg.serialize())
 
-    async def ensure_connected(self):
-        if not await self.writeable():
-            await self.connect()
+    async def ensure_connected(
+        self,
+        chan_id: int | None = None,
+        disconnect_all_channels: bool = False,
+        exclusive: bool = True,
+    ) -> int | None:
+        if disconnect_all_channels:
+            await self.disconnect(force=True)
 
-        while not await self.writeable():
+        if chan_id and not disconnect_all_channels:
+            if not await self.writeable(chan_id):
+                await self.disconnect(force=True)
+            else:
+                return chan_id
+
+        chan_id = await self.connect(exclusive)
+
+        while not await self.writeable(chan_id):
             log.warning(
                 f"Reconnection to {self.address}:{self.port} failed, sleeping 30s"
             )
             await asyncio.sleep(30)
             log.info(f"Reconnecting to {self.address}:{self.port}")
-            await self.connect()
-            # if not self.failed_on:
-            #     break
+            chan_id = await self.connect(exclusive)
 
         log.info(f"Socket to {self.address}:{self.port} is writeable")
+
+        return chan_id
 
     @asynccontextmanager
     async def connection_manager(self):
@@ -706,6 +718,7 @@ class EncryptedSocketClientTransport(ClientTransport):
         await asyncio.sleep(random.random())
 
         while True:
+            # get random bytes during sleep? (task)
             await asyncio.sleep(delay)
 
             msg = AesRekeyMessage(get_random_bytes(4))
@@ -713,9 +726,9 @@ class EncryptedSocketClientTransport(ClientTransport):
 
             await self.send(msg.serialize())
 
-            log.info(
-                f"{self.peername} Rekey message sent... sleeping {round(delay, 2)}s"
-            )
+            # log.info(
+            #     f"{self.peername} Rekey message sent... sleeping {round(delay, 2)}s"
+            # )
 
     async def connect(self, exclusive: bool = False) -> int | None:
         # log.info(f"DEBUG: all tasks count: {len(asyncio.all_tasks())}")
@@ -724,11 +737,7 @@ class EncryptedSocketClientTransport(ClientTransport):
         # start fresh - not 100% on this
         self.failed_on = ""
 
-        log.info(f"Transport id: {id(self)} Connecting...")
-        # if self._connecting:
-        #     log.info("Connecting... adding channel")
-        #     # isn't this wrong???
-        #     channel = self.channels.add_channel(exclusive)
+        # log.info(f"Transport id: {id(self)} Connecting...")
 
         while self._connecting or self._disconnecting:
             await asyncio.sleep(0.02)
@@ -743,7 +752,7 @@ class EncryptedSocketClientTransport(ClientTransport):
             # self.channels += 1
             chan_id = self.channels.add_channel(exclusive)
 
-            log.info(f"Adding new channel. Total: {self.channels}")
+            # log.info(f"Adding new channel. Total: {self.channels}")
             return chan_id
 
         self._connecting = True
@@ -801,7 +810,7 @@ class EncryptedSocketClientTransport(ClientTransport):
                 self._connecting = False
                 return
 
-            log.info("Connection authenticated!")
+            # log.info("Connection authenticated!")
 
         await self.send_forwarding_message()
 
@@ -902,7 +911,9 @@ class EncryptedSocketClientTransport(ClientTransport):
                 data = await asyncio.wait_for(coro, timeout=timeout)
 
             except asyncio.TimeoutError as e:
-                log.error(f"Timeout of {timeout}s exceeded for socket read, returning")
+                log.error(
+                    f"{self.peername}: Timeout of {timeout}s exceeded for socket read, returning"
+                )
                 self._connected = False
                 self.encrypted = False
                 # self.channels.remove_all_channels()
@@ -989,7 +1000,7 @@ class EncryptedSocketClientTransport(ClientTransport):
                     # our_socket = self.writer.get_extra_info("sockname")
                     await self.on_pty_data_callback(self.sockname, message.data)
 
-                case RpcReplyMessage():
+                case RpcReplyMessage() | LivelinessMessage():
                     chan = self.channels.get_channel_by_id(message.chan_id)
 
                     if chan:
@@ -999,9 +1010,6 @@ class EncryptedSocketClientTransport(ClientTransport):
                         log.warning(
                             f"Dropping message {message} with Unknown channel id: {message.chan_id}"
                         )
-
-                case LivelinessMessage():
-                    await self.liveliness_message_handler(message)
 
                 case ChallengeMessage() | AuthReplyMessage():
                     await self.authentication_message_handler(message)
@@ -1158,14 +1166,11 @@ class EncryptedSocketClientTransport(ClientTransport):
             self.read_socket_task.cancel()
 
     async def disconnect(self, chan_id: int | None = None, force: bool = False):
-        # this_frame = inspect.currentframe()
-        # caller_frame = inspect.getouterframes(this_frame, 2)
-        # print("caller name:", caller_frame[1][3])
         # print("caller", inspect.currentframe().f_back.f_code.co_name)
 
-        log.info(
-            f"Disconnect: {self.sockname} <-> {self.peername}. Total channels before: {self.channels} Force: {force}"
-        )
+        # log.info(
+        #     f"Disconnect: {self.sockname} <-> {self.peername}. Total channels before: {self.channels} Force: {force}"
+        # )
 
         if force:
             self.channels.remove_all_channels()
@@ -1175,7 +1180,7 @@ class EncryptedSocketClientTransport(ClientTransport):
         # this shouldn't happen but yeah
         # self.channels = max(0, self.channels)
 
-        print(f"Channels now: {self.channels}")
+        # print(f"Channels now: {self.channels}")
 
         if self.channels:
             return
